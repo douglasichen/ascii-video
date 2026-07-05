@@ -96,21 +96,29 @@ window.addEventListener("resize", computeGrid);
 
 const RAMP_LAST = RAMP.length - 1;
 const RAMP_SCALE = RAMP.length / 255;
-// Grayscale only. Quantize luminance to 16 levels so the whole frame has at most 16 distinct
-// colors -> adjacent cells share a color -> runs MERGE -> few <span>s -> cheap build + innerHTML.
-// (Color was removed: independent RGB channels give 16^3 colors, shattering the merge -> 5-10x more
-// spans -> tanked FPS. See git history / bench if it's ever wanted back.) Only 16 colors exist, so
-// precompute their hex strings once -> zero per-run string building. Preserves pure 0 and 255.
-const QUANT_LUT = new Uint8Array(256); // luminance -> quantized gray level (compare key)
-const QUANT_CSS = new Array(256);      // luminance -> "#rrggbb" for that level
-for (let v = 0; v < 256; v++) {
-  const q = (v >> 4) * 17;
-  QUANT_LUT[v] = q;
-  const h = q.toString(16).padStart(2, "0");
-  QUANT_CSS[v] = "#" + h + h + h;
+// Grayscale only, quantized to 16 gray levels. Each level is a CSS class (16 rules in one <style>),
+// so a cell emits `<span class=h>` (~13B) instead of `<span style="color:#rrggbb">` (~28B): ~40%
+// less markup AND the browser resolves 16 shared class styles instead of tens of thousands of inline
+// ones. On high-detail (noisy) video ~1 span/cell is unavoidable, so shrinking the per-span cost and
+// killing per-frame allocation is what tames the GC pauses that show up as huge random FPS drops.
+// (Color removed: independent RGB = 16^3 colors, shatters run-merging -> 5-10x spans. See git history.)
+const LEVELS = 16;
+const QUANT_LEVEL = new Uint8Array(256); // luminance -> level index 0..LEVELS-1 (compare key + class index)
+const LEVEL_CLASS = new Array(LEVELS);   // level index -> interned class-name string ("a".."p")
+let quantCss = "";
+for (let i = 0; i < LEVELS; i++) {
+  const g = Math.round(i * 255 / (LEVELS - 1));
+  const h = g.toString(16).padStart(2, "0");
+  LEVEL_CLASS[i] = String.fromCharCode(97 + i);
+  quantCss += `#screen .${LEVEL_CLASS[i]}{color:#${h}${h}${h}}`;
 }
+for (let v = 0; v < 256; v++) QUANT_LEVEL[v] = Math.round(v / 255 * (LEVELS - 1));
+{ const st = document.createElement("style"); st.textContent = quantCss; document.head.appendChild(st); }
 // contrast curve, rebuilt per frame (256 entries is nothing next to the pixel loop). Uint8Clamped rounds+clamps for free.
 const CONTRAST_LUT = new Uint8ClampedArray(256);
+// Reused across frames: pushing interned strings (literals, class names, cached single chars) means
+// the whole markup build allocates ~nothing per frame — only the final join() + getImageData remain.
+const PARTS = [];
 
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
 let lastVt = 0; // last video.currentTime, to detect loop wrap (decode stall on wrap is not a render cost)
@@ -135,31 +143,26 @@ function renderFrame(now) {
     const clut = CONTRAST_LUT;
     for (let v = 0; v < 256; v++) clut[v] = (v - 128) * contrastFactor + 128;
 
-    let out = "";
+    const parts = PARTS;
+    parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
     for (let r = 0; r < rows; r++) {
-      let runQ = -1; // no color is -1; quantized gray is 0..255
-      let runCss = "";
-      let runChars = "";
+      let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
       let base = r * cols * 4;
       for (let c = 0; c < cols; c++, base += 4) {
         const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
-        const gi = gray | 0;
-        const q = QUANT_LUT[gi];
-        const char = RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST];
-        if (q !== runQ) {
-          if (runQ !== -1) out += `<span style="color:${runCss}">${runChars}</span>`;
-          runQ = q;
-          runCss = QUANT_CSS[gi]; // precomputed, no per-run string building
-          runChars = char;
-        } else {
-          runChars += char;
+        const lv = QUANT_LEVEL[gray | 0];
+        if (lv !== runLv) {
+          if (runLv !== -1) parts.push("</span>");
+          parts.push("<span class=", LEVEL_CLASS[lv], ">");
+          runLv = lv;
         }
+        parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
       }
-      out += `<span style="color:${runCss}">${runChars}</span>`;
-      if (r < rows - 1) out += "\n";
+      parts.push("</span>");
+      if (r < rows - 1) parts.push("\n");
     }
     const tDom = performance.now();
-    screen.innerHTML = out;
+    screen.innerHTML = parts.join("");
     void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
@@ -167,10 +170,11 @@ function renderFrame(now) {
     lastVt = video.currentTime;
     drawMs += d; buildMs += b; domMs += dom;
     if (!looped && (worst.length < WORST_N || total > worst[worst.length - 1].ms)) {
+      const record = total > (worst.length ? worst[0].ms : 0); // new all-time worst?
       worst.push({ ms: total, d, b, dom, grid: `${cols}×${rows}`, at: Math.round(now) });
       worst.sort((x, y) => y.ms - x.ms);
       if (worst.length > WORST_N) worst.length = WORST_N;
-      logWorst();
+      if (record) logWorst(); // only on a new #1 (rare) — avoids console spam/jank; full list is on window.WORST, dumpWorst() anytime
     }
     fpsCount++;
     if (now - fpsLast >= 500) {
