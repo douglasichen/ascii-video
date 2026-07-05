@@ -3,7 +3,7 @@
 <style>
   html, body { margin:0; height:100%; background:#000; font-family:monospace; overflow:hidden; }
   /* Pre-JS fallback text colour; buildPalette() then sets #screen.style.color to the chosen base colour.
-     Only matters for turbo (flat text) — shade-mode <i> spans set their own (tinted) colour per level. */
+     Only matters when shading is off (flat text) — shaded <i> spans set their own tinted colour per level. */
   #screen { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); margin:0; white-space:pre; line-height:1; color:#fff; }
   #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; padding:12px; background:#000; z-index:1; }
   #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
@@ -15,6 +15,7 @@
   .ctrl label { width:80px; }
   .ctrl input[type=range] { flex:1; }
   .ctrl input[type=color] { flex:1; height:22px; padding:0; border:1px solid #333; background:none; }
+  .ctrl input[type=checkbox] { margin:0 auto 0 0; width:16px; height:16px; } /* margin-right:auto keeps reset aligned right */
   .ctrl span { width:38px; text-align:right; color:#888; }
   .ctrl button { font-size:11px; padding:2px 6px; }
 </style></head>
@@ -44,10 +45,12 @@ let cols = 0, rows = 0;
 const CONTROLS = {
   detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
-  // turbo=1 renders plain white text via textContent instead of per-cell <i> gray spans.
-  // The span machinery is ~20x the cost of the plain path (measured), so turbo trades the
-  // grayscale tint for a locked framerate. 0 = grayscale (default look), 1 = blazing.
-  turbo: { label: "turbo", min: 0, max: 1, step: 1, default: 0, unit: "" },
+  brightness: { label: "brightness", min: 0, max: 100, step: 1, default: 50, unit: "%" },
+  invert: { label: "invert", type: "checkbox", default: false },
+  // shading on = per-cell <i> gray/tinted spans (the default look). Off = plain one-colour text via
+  // textContent, which skips the span machinery (~20x cheaper dom, measured) for a locked framerate on
+  // big grids / weak hardware. It's a checkbox; the fast "turbo" path is just shading turned off.
+  shading: { label: "shading", type: "checkbox", default: true },
   // base display colour. Shade mode ramps each level black -> this colour (tinted depth); turbo mode
   // uses it flat. White (#ffffff) = the classic gray look. type:"color" -> renders an <input type=color>.
   color: { label: "colour", type: "color", default: "#ffffff" },
@@ -60,21 +63,23 @@ for (const key in CONTROLS) {
   const c = CONTROLS[key];
   const row = document.createElement("div");
   row.className = "ctrl";
-  const input = c.type === "color"
-    ? `<input type="color" id="ctrl-${key}" value="${c.default}">`
-    : `<input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">`;
+  let input;
+  if (c.type === "color") input = `<input type="color" id="ctrl-${key}" value="${c.default}">`;
+  else if (c.type === "checkbox") input = `<input type="checkbox" id="ctrl-${key}" ${c.default ? "checked" : ""}>`;
+  else input = `<input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">`;
   row.innerHTML = `
     <label>${c.label}</label>
     ${input}
-    ${c.type === "color" ? "" : `<span id="val-${key}">${c.default}${c.unit}</span>`}
+    ${c.type ? "" : `<span id="val-${key}">${c.default}${c.unit}</span>`}
     <button data-key="${key}">reset</button>`;
   configEl.appendChild(row);
 }
 
 function setControl(key, value) {
   state[key] = value;
-  document.getElementById(`ctrl-${key}`).value = value;
-  const valEl = document.getElementById(`val-${key}`); // color controls have no value readout
+  const input = document.getElementById(`ctrl-${key}`);
+  if (CONTROLS[key].type === "checkbox") input.checked = value; else input.value = value;
+  const valEl = document.getElementById(`val-${key}`); // only range controls have a value readout
   if (valEl) valEl.textContent = value + CONTROLS[key].unit;
   if (key === "detail") computeGrid();
   if (key === "color") buildPalette(value);
@@ -88,7 +93,7 @@ function setControl(key, value) {
 for (const key in CONTROLS) {
   const c = CONTROLS[key];
   document.getElementById(`ctrl-${key}`).addEventListener("input", e =>
-    setControl(key, c.type === "color" ? e.target.value : Number(e.target.value)));
+    setControl(key, c.type === "color" ? e.target.value : c.type === "checkbox" ? e.target.checked : Number(e.target.value)));
 }
 configEl.addEventListener("click", e => {
   const key = e.target.dataset.key;
@@ -192,12 +197,24 @@ function paint() {
   const data = ctx.getImageData(0, 0, cols, rows).data;
   const tBuild = performance.now();
   const contrastFactor = state.contrast / 50; // 50% = neutral (factor 1)
+  const brightOffset = (state.brightness - 50) * 2.55; // 50% = neutral (0); ±50 steps -> ~±128 offset
+  // Contrast, invert and brightness all fold into the same per-frame 256-entry LUT (Uint8Clamped clamps
+  // for us), so they cost nothing per pixel — applied before quantization, they shift the whole luminance
+  // -> which gray level / char each cell lands on. ORDER MATTERS: contrast (scale around 128), THEN invert
+  // (255 - value, a photo negative, dark<->light), THEN brightness (additive). Brightness is added last so
+  // it still brightens the *displayed* image whether or not invert is on — folding it in before the invert
+  // would reverse the slider. (Clamp the contrast result before inverting so brightness lands correctly.)
+  const invert = state.invert;
   const clut = CONTRAST_LUT;
-  for (let v = 0; v < 256; v++) clut[v] = (v - 128) * contrastFactor + 128;
+  for (let v = 0; v < 256; v++) {
+    let x = (v - 128) * contrastFactor + 128;
+    if (invert) x = 255 - (x < 0 ? 0 : x > 255 ? 255 : x);
+    clut[v] = x + brightOffset;
+  }
 
   const parts = PARTS;
   parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
-  const shade = !state.turbo; // grayscale spans vs plain text
+  const shade = state.shading; // per-cell tinted spans vs plain one-colour text
   for (let r = 0; r < rows; r++) {
     let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
     let base = r * cols * 4;

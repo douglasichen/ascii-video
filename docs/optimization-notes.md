@@ -43,12 +43,13 @@ more often so runs merge. Cuts the `dom` phase ~30% and shrinks the per-frame
 allocation behind the big random GC-pause drops. **Look is unchanged** — the
 banding is hidden by the character ramp (verified by screenshot A/B).
 
-### 2. `turbo` toggle (default off)
-A 0/1 control. `turbo=1` renders each row as plain white text via
+### 2. Fast path: shading off (the `shading` checkbox)
+When `shading` is off, each row renders as plain single-colour text via
 `textContent`, skipping the per-cell `<i>` spans entirely (~20× cheaper `dom`).
-Trades the grayscale tint for maximum headroom — for large grids / weak
-hardware where the shaded path can't hold the framerate. Default stays the
-grayscale look (the signature); turbo is the escape hatch.
+Trades the tint for maximum headroom — for large grids / weak hardware where
+the shaded path can't hold the framerate. Default stays shaded (the signature
+look); shading-off is the escape hatch. (Originally a `turbo` 0/1 slider; same
+mechanism, renamed to a `shading` checkbox for clarity — "shading off" = turbo.)
 
 ### 3. Detail change no longer "zooms" (the real bug)
 Symptom: with the video **paused**, dragging `detail` made the picture appear
@@ -63,7 +64,7 @@ the font went 6→12→18 px, so the on-screen box scaled 2–3×.
 
 Fix: the draw→build→dom body was extracted into a `paint()` function, and
 `setControl()` now calls `paint()` immediately after any control change (guarded
-by `video.videoWidth && rows`). So a detail/contrast/turbo change re-samples the
+by `video.videoWidth && rows`). So any control change re-samples the
 **current** frame at the new grid right away — including while paused. Result:
 the on-screen box stays a fixed size (~473 px wide here) at every detail level;
 only the character resolution changes. No zoom.

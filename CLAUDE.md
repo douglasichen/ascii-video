@@ -83,14 +83,24 @@ quantized gray level → ASCII character → grayscale DOM text**.
   quantized int key, never as freshly-built strings. The `#fps` readout is a
   live profiler (avg draw/build/dom split + worst-frame peak) — leave it or
   gate it behind a flag, but it's how you attribute any FPS drop to a phase.
-- **`turbo` toggle (0/1 in `CONTROLS`, default 0).** turbo=1 renders each row
-  as plain white text via `screen.textContent` instead of the per-cell
-  `<i class>` gray spans. Measured ~20× cheaper on the dom phase (no HTML
-  parse, no per-cell element create/destroy) — the span machinery, not the
-  text volume, is the whole cost. The trade is losing the grayscale tint
-  (luminance then rides on the char ramp only). Default stays grayscale (the
-  signature look); turbo is the escape hatch for big grids / weak hardware
-  where shade can't hold the video's framerate.
+- **`shading` checkbox (in `CONTROLS`, default on).** When **off**, each row
+  renders as plain single-colour text via `screen.textContent` instead of the
+  per-cell `<i class>` tinted spans. Measured ~20× cheaper on the dom phase (no
+  HTML parse, no per-cell element create/destroy) — the span machinery, not the
+  text volume, is the whole cost. The trade is losing the luminance tint
+  (brightness then rides on the char ramp only). Default stays shaded (the
+  signature look); turning shading off is the fast escape hatch for big grids /
+  weak hardware where the shaded path can't hold the video's framerate. (This
+  was originally a `turbo` slider — same mechanism, renamed for clarity: "shading
+  off" *is* turbo.)
+- **`brightness` / `contrast` sliders and the `invert` checkbox** all fold into
+  the one per-frame 256-entry `CONTRAST_LUT` in `paint()`. Because the LUT is
+  applied before quantization, they're free per pixel — no per-cell cost, they
+  just shift which gray level / char each cell lands on. `Uint8ClampedArray`
+  clamps for free. **Order matters:** contrast (scale around 128) → invert
+  (`255 - value`) → brightness (additive), so brightness is applied *after* the
+  invert and still brightens the displayed image whether or not invert is on
+  (fold it in before the invert and the slider reverses).
 - **Known footgun:** `#screen` must NOT have `display:flex`. It was
   centered with flex+align-items+justify-content early on, which broke
   multi-line rendering — each per-color `<span>` becomes its own flex item,
