@@ -33,6 +33,7 @@ const video = document.getElementById("video");
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
 const canvas = document.getElementById("sample");
+const bar = document.getElementById("bar");
 const fpsEl = document.getElementById("fps");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 let cols = 0, rows = 0;
@@ -75,8 +76,10 @@ configEl.addEventListener("click", e => {
 function computeGrid() {
   if (!video.videoWidth) return;
   const fontPx = 22 - state.detail * 2; // detail 1 (chunky) .. 10 (fine) -> 20px .. 2px
+  const barH = bar.offsetHeight; // top URL bar is fixed and opaque; keep the grid clear of it
+  const availH = window.innerHeight - barH;
   const maxCols = Math.floor(window.innerWidth / (fontPx * 0.6));
-  const maxRows = Math.floor(window.innerHeight / fontPx);
+  const maxRows = Math.floor(availH / fontPx);
   const videoRatio = (video.videoHeight / video.videoWidth) * CHAR_ASPECT;
   cols = maxCols;
   rows = Math.round(cols * videoRatio);
@@ -89,6 +92,7 @@ function computeGrid() {
   canvas.width = cols;
   canvas.height = rows;
   screen.style.fontSize = fontPx + "px";
+  screen.style.top = (barH + availH / 2) + "px"; // center in the space below the bar, not the whole viewport
 }
 
 function onMetadata() { computeGrid(); }
