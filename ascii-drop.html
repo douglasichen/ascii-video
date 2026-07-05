@@ -122,6 +122,7 @@ const PARTS = [];
 
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
 let lastVt = 0; // last video frame time, to detect loop wrap (decode stall on wrap is not a render cost)
+let lastPresented = 0, presentedAtWindow = 0; // rVFC frame counter: how many frames the VIDEO actually showed vs how many we rendered
 // Render once per PRESENTED VIDEO FRAME, not per display refresh: a 30fps video on a 60/120Hz screen
 // was rebuilt 2-4x per frame for identical output. requestVideoFrameCallback fires exactly per new
 // frame -> halves+ the build/dom/getImageData work and the GC that rides on it. Re-registers itself
@@ -175,6 +176,7 @@ function renderFrame(now, metadata) {
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
     const vt = metadata ? metadata.mediaTime : video.currentTime; // rVFC gives the exact frame time
+    if (metadata) lastPresented = metadata.presentedFrames; // total frames the video has shown so far
     const looped = vt < lastVt; // wrapped to start -> decode stall, skip this frame
     lastVt = vt;
     drawMs += d; buildMs += b; domMs += dom;
@@ -187,9 +189,18 @@ function renderFrame(now, metadata) {
     }
     fpsCount++;
     if (now - fpsLast >= 500) {
-      const n = fpsCount;
+      const n = fpsCount, secs = (now - fpsLast) / 1000;
+      const renderFps = Math.round(n / secs);
+      // normalize to the video: rendered fps vs the video's own fps, and frames we couldn't keep up with
+      let head = `${renderFps} fps`;
+      if (lastPresented) {
+        const vFrames = lastPresented - presentedAtWindow;
+        const dropped = Math.max(0, vFrames - n);
+        head = `${renderFps}/${Math.round(vFrames / secs)} fps · ${dropped} drop`;
+        presentedAtWindow = lastPresented;
+      }
       const w = worst[0];
-      fpsEl.textContent = `${Math.round(n * 1000 / (now - fpsLast))} fps · ${cols}×${rows} · `
+      fpsEl.textContent = `${head} · ${cols}×${rows} · `
         + `avg d${(drawMs / n).toFixed(1)} b${(buildMs / n).toFixed(1)} dom${(domMs / n).toFixed(1)} · `
         + (w ? `worst ${w.ms.toFixed(0)}ms (d${w.d.toFixed(0)} b${w.b.toFixed(0)} dom${w.dom.toFixed(0)}) ⟳` : "");
       fpsLast = now;
