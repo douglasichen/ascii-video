@@ -64,10 +64,12 @@ quantized gray level → ASCII character → grayscale DOM text**.
   count (build time, `innerHTML` parse, layout, and paint all scale with
   it), not by the per-pixel math. See the perf notes below.
 - **Perf / why grayscale-only (color is a deferred feature).** Output
-  luminance is quantized to 16 gray levels (`QUANT_LUT`/`QUANT_CSS`,
-  precomputed once), so a whole frame contains at most 16 distinct colors →
+  luminance is quantized to 8 gray levels (`QUANT_LEVEL`/`LEVEL_CLASS`,
+  precomputed once), so a whole frame contains at most 8 distinct colors →
   neighbouring cells constantly match → runs merge into long spans → few
-  spans. Full RGB color was removed because independent channels give
+  spans. (Was 16; dropped to 8 because it roughly halves the span count with
+  banding still hidden by the char ramp — span count is the render's
+  bottleneck.) Full RGB color was removed because independent channels give
   16³ = 4096 possible colors, which shatters the merge (5–10× more spans,
   measured) and tanked FPS. Color is **deferred, not gone**: to bring it
   back, keep the quantization but use a coarser palette in color mode
@@ -80,6 +82,14 @@ quantized gray level → ASCII character → grayscale DOM text**.
   quantized int key, never as freshly-built strings. The `#fps` readout is a
   live profiler (avg draw/build/dom split + worst-frame peak) — leave it or
   gate it behind a flag, but it's how you attribute any FPS drop to a phase.
+- **`turbo` toggle (0/1 in `CONTROLS`, default 0).** turbo=1 renders each row
+  as plain white text via `screen.textContent` instead of the per-cell
+  `<i class>` gray spans. Measured ~20× cheaper on the dom phase (no HTML
+  parse, no per-cell element create/destroy) — the span machinery, not the
+  text volume, is the whole cost. The trade is losing the grayscale tint
+  (luminance then rides on the char ramp only). Default stays grayscale (the
+  signature look); turbo is the escape hatch for big grids / weak hardware
+  where shade can't hold the video's framerate.
 - **Known footgun:** `#screen` must NOT have `display:flex`. It was
   centered with flex+align-items+justify-content early on, which broke
   multi-line rendering — each per-color `<span>` becomes its own flex item,

@@ -2,7 +2,7 @@
 <html><head><meta charset="utf-8"><title>ASCII drop player</title>
 <style>
   html, body { margin:0; height:100%; background:#000; font-family:monospace; overflow:hidden; }
-  #screen { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); margin:0; white-space:pre; line-height:1; }
+  #screen { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); margin:0; white-space:pre; line-height:1; color:#fff; }
   #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; padding:12px; background:#000; z-index:1; }
   #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
   #bar button { font-family:monospace; font-size:14px; padding:6px 12px; }
@@ -41,6 +41,10 @@ let cols = 0, rows = 0;
 const CONTROLS = {
   detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
+  // turbo=1 renders plain white text via textContent instead of per-cell <i> gray spans.
+  // The span machinery is ~20x the cost of the plain path (measured), so turbo trades the
+  // grayscale tint for a locked framerate. 0 = grayscale (default look), 1 = blazing.
+  turbo: { label: "turbo", min: 0, max: 1, step: 1, default: 0, unit: "" },
 };
 const state = {};
 for (const key in CONTROLS) state[key] = CONTROLS[key].default;
@@ -100,14 +104,15 @@ window.addEventListener("resize", computeGrid);
 
 const RAMP_LAST = RAMP.length - 1;
 const RAMP_SCALE = RAMP.length / 255;
-// Grayscale only, quantized to 16 gray levels. Each level is a CSS class (16 rules in one <style>),
-// and cells emit `<i class=h>` (~11B) instead of `<span style="color:#rrggbb">` (~28B): the shortest
-// element tag + shared class styles mean far less markup AND the browser resolves 16 class styles
-// instead of tens of thousands of inline ones. On high-detail (noisy) video ~1 span/cell is
-// unavoidable, so shrinking per-span bytes + killing per-frame allocation is what tames the GC pauses
-// that show up as huge random FPS drops. (<i> is forced upright below; color removed — RGB = 16^3
-// colors shatters run-merging, see git history.)
-const LEVELS = 16;
+// Grayscale only, quantized to LEVELS gray levels. Each level is a CSS class (one rule each in one
+// <style>), and cells emit `<i class=h>` (~11B) instead of `<span style="color:#rrggbb">` (~28B): the
+// shortest element tag + shared class styles mean far less markup AND the browser resolves a handful of
+// class styles instead of tens of thousands of inline ones. Fewer levels -> adjacent cells share a level
+// more often -> runs merge -> fewer spans -> less markup + less per-frame allocation, which is what tames
+// the GC pauses that show up as huge random FPS drops. 8 is the sweet spot: dropping from 16 roughly
+// halves the span count with banding still hidden by the char ramp. (turbo mode skips spans entirely;
+// <i> is forced upright below; color removed — RGB = 16^3 colors shatters run-merging, see git history.)
+const LEVELS = 8;
 const QUANT_LEVEL = new Uint8Array(256); // luminance -> level index 0..LEVELS-1 (compare key + class index)
 const LEVEL_CLASS = new Array(LEVELS);   // level index -> interned class-name string ("a".."p")
 let quantCss = "#screen i{font-style:normal}"; // <i> defaults to italic; keep the glyphs upright
@@ -163,24 +168,29 @@ function renderFrame(now, metadata) {
 
     const parts = PARTS;
     parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
+    const shade = !state.turbo; // grayscale spans vs plain text
     for (let r = 0; r < rows; r++) {
       let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
       let base = r * cols * 4;
       for (let c = 0; c < cols; c++, base += 4) {
         const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
-        const lv = QUANT_LEVEL[gray | 0];
-        if (lv !== runLv) {
-          if (runLv !== -1) parts.push("</i>");
-          parts.push("<i class=", LEVEL_CLASS[lv], ">");
-          runLv = lv;
+        if (shade) {
+          const lv = QUANT_LEVEL[gray | 0];
+          if (lv !== runLv) {
+            if (runLv !== -1) parts.push("</i>");
+            parts.push("<i class=", LEVEL_CLASS[lv], ">");
+            runLv = lv;
+          }
         }
         parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
       }
-      parts.push("</i>");
+      if (shade) parts.push("</i>");
       if (r < rows - 1) parts.push("\n");
     }
     const tDom = performance.now();
-    screen.innerHTML = parts.join("");
+    // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
+    if (shade) screen.innerHTML = parts.join("");
+    else screen.textContent = parts.join("");
     void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
