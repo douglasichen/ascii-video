@@ -2,10 +2,12 @@
 
 ## Context
 
-The current tool is a local prototype: `ascii-drop.html` (canvas-based ASCII
-renderer with resolution/color/contrast sliders) served by a stdlib
-`http.server` (`server.py`), which shells out to the `yt-dlp` CLI to
-**download the full mp4** to disk before serving it back to the page.
+The current tool is a local prototype: `ascii-drop.html` (a DOM-text ASCII
+renderer — colored `<span>` runs in a `<pre>`, not canvas glyphs, since
+canvas text blurs on zoom — with detail/color→gray/contrast sliders) served
+by a stdlib `http.server` (`server.py`), which shells out to the `yt-dlp`
+CLI to **download the full mp4** to disk before serving it back to the
+page.
 
 Goal: turn this into a real, git-versioned project deployed on Vercel,
 without the local server or full video download. Embeddable-widget /
@@ -68,8 +70,8 @@ per Vercel's Python runtime convention). On `GET /api/resolve?url=...`:
 of `fetch("/download?url=...")` triggering a full download and then setting
 `video.src = "/current.mp4"`, it calls `fetch("/api/resolve?url=...")` and
 sets `video.src` directly to the returned `streamUrl`. Everything else
-(canvas rendering loop, resolution/gray/contrast sliders with reset buttons,
-loop, space-to-pause) is unchanged.
+(the DOM-text rendering loop, detail/gray/contrast sliders with reset
+buttons, loop, space-to-pause) is unchanged.
 
 ## Data flow
 
@@ -79,9 +81,9 @@ loop, space-to-pause) is unchanged.
 4. Browser sets `<video src>` to that URL and calls `.play()` (still inside
    the click handler, so autoplay-with-sound isn't blocked).
 5. The existing `requestAnimationFrame` loop samples video frames onto an
-   offscreen canvas, applies contrast/grayscale, maps luminance to ASCII
-   characters, and draws colored glyphs onto the visible canvas — unchanged
-   from the current prototype.
+   offscreen sampling canvas, applies contrast/grayscale, maps luminance to
+   ASCII characters, and builds colored DOM text (`<span>` runs in a
+   `<pre>`) for the visible output — unchanged from the current prototype.
 
 ## Error handling
 
