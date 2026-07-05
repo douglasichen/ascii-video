@@ -1,0 +1,11 @@
+# Only index.html + api/ + requirements.txt need to deploy. Keep the local-only tools and artifacts out.
+server.py
+ascii_video.py
+videoplayback.html
+current.mp4
+*.mp4
+docs/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

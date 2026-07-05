@@ -102,7 +102,7 @@
 <div id="fps"></div>
 <div id="config"></div>
 <canvas id="sample" style="display:none"></canvas>
-<video id="video" style="display:none" loop playsinline></video>
+<video id="video" style="display:none" loop playsinline crossorigin="anonymous"></video>
 <script>
 const RAMP = " .:-=+*#%@";
 const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
@@ -362,23 +362,31 @@ function renderFrame(now, metadata) {
 }
 scheduleFrame();
 
+// Ask the backend to resolve a YouTube link to a playable stream URL, then point <video> at it.
+// Both backends return {streamUrl}: locally it's a same-origin /current.mp4 (server.py downloads);
+// on Vercel it's a direct CDN URL (api/resolve.py). Same frontend either way.
 async function loadUrl(youtubeUrl) {
   if (!youtubeUrl) return;
   status.textContent = "loading…";
-  const res = await fetch("/download?url=" + encodeURIComponent(youtubeUrl));
-  const body = await res.json();
-  if (!res.ok) {
-    status.textContent = "couldn’t load — " + (body.error || "check the link and try again");
+  let body;
+  try {
+    const res = await fetch("/api/resolve?url=" + encodeURIComponent(youtubeUrl));
+    body = await res.json();
+    if (!res.ok) throw new Error(body.error || "");
+  } catch (err) {
+    status.textContent = "couldn’t load — " + (err.message || "check the link and try again");
     return;
   }
   status.textContent = "";
   video.onloadedmetadata = onMetadata;
-  video.src = "/current.mp4?t=" + Date.now();
-  video.play();
+  video.src = body.streamUrl;
+  video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
 
 // Reveal the ASCII, hide the empty state, once frames actually start.
 video.addEventListener("playing", () => document.body.classList.add("playing"));
+// A resolved CDN URL can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
+video.addEventListener("error", () => { if (video.src) status.textContent = "this video wouldn’t play — try another link"; });
 
 const urlInput = document.getElementById("url");
 document.getElementById("load").addEventListener("click", () => loadUrl(urlInput.value.trim()));

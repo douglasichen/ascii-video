@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Serve ascii-drop.html and download YouTube links to current.mp4 via yt-dlp."""
+"""Local dev server: serve public/index.html and resolve YouTube links for it.
+
+Mirrors the deployed contract — GET /api/resolve?url=... returns {"streamUrl": ...} — but locally
+that stream is a same-origin /current.mp4 that we download via yt-dlp (no canvas-taint / CORS issues,
+unlike the direct CDN URL the Vercel function returns). The frontend is identical either way.
+"""
 import http.server
 import json
 import os
 import subprocess
+import time
 import urllib.parse
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -19,13 +25,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/download":
-            return self.handle_download(urllib.parse.parse_qs(parsed.query))
+        if parsed.path == "/api/resolve":
+            return self.handle_resolve(urllib.parse.parse_qs(parsed.query))
         if parsed.path == "/":
-            self.path = "/ascii-drop.html"
+            self.path = "/index.html"
         return super().do_GET()
 
-    def handle_download(self, query):
+    def handle_resolve(self, query):
         url = (query.get("url") or [""])[0]
         if not url:
             return self.respond_json(400, {"error": "missing url"})
@@ -44,7 +50,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             )
         except subprocess.CalledProcessError as e:
             return self.respond_json(500, {"error": e.stderr[-2000:]})
-        return self.respond_json(200, {"ok": True})
+        # Same-origin path + a token so the <video> reloads when a new link resolves to /current.mp4.
+        return self.respond_json(200, {"streamUrl": "/current.mp4?t=%d" % int(time.time() * 1000)})
 
     def respond_json(self, status, obj):
         body = json.dumps(obj).encode()

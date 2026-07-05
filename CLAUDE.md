@@ -8,10 +8,10 @@ A YouTube-link-to-live-ASCII-art video player, plus one older standalone
 batch-conversion tool. Two separate, unrelated code paths — don't assume
 they share logic:
 
-- **`ascii-drop.html` + `server.py`** — the live player. Paste a YouTube
-  URL, it plays in the browser as animated ASCII text with tunable
-  detail/color/contrast, looping, with audio. This is the active thing being
-  developed.
+- **`index.html` + `api/resolve.py`** (deploys to Vercel) — the live player.
+  Paste a YouTube URL, it plays in the browser as animated ASCII text with
+  tunable detail/contrast/brightness/invert/shading/colour, looping, with audio.
+  This is the active thing being developed. Runs locally via `server.py` too.
 - **`ascii_video.py`** — an older, independent CLI tool that batch-converts
   every frame of a local mp4 into a single giant self-contained HTML file
   (frames baked into a JS array, played back against an embedded base64
@@ -24,12 +24,13 @@ they share logic:
 python3 server.py
 ```
 
-Serves `ascii-drop.html` at `http://localhost:8420/`. Needs `yt-dlp` on
-PATH (`pip install yt-dlp`) and `ffmpeg`/`ffprobe` (Homebrew).
-`server.py`'s `/download` endpoint shells out to the `yt-dlp` CLI to
-**download the full mp4** to `current.mp4` (gitignored) before the page
-plays it — this is a local-dev-only shortcut, see Architecture below for
-why the real deployment won't work this way.
+Serves `index.html` at `http://localhost:8420/`. Needs `yt-dlp` on PATH
+(`pip install yt-dlp`) and `ffmpeg`/`ffprobe` (Homebrew). `server.py`'s
+`/api/resolve` endpoint shells out to the `yt-dlp` CLI to **download the full
+mp4** to `current.mp4` (gitignored), then returns `{"streamUrl":"/current.mp4?…"}`
+— a same-origin file, which the canvas can `getImageData` without CORS taint.
+The deployed function returns the same shape but with a direct CDN URL (see
+Deployment). One `index.html` drives both; only the resolver differs.
 
 ## Running the batch converter
 
@@ -44,9 +45,9 @@ base64-embedded audio track.
 
 ## Architecture: the live player's rendering pipeline
 
-`ascii-drop.html` is a single self-contained file (no build step, no
-framework). Pipeline, in order: **video → contrast filter → luminance →
-quantized gray level → ASCII character → grayscale DOM text**.
+`index.html` is a single self-contained file (no build step, no
+framework). Pipeline, in order: **video → contrast/brightness/invert filter →
+luminance → quantized level → ASCII character → tinted DOM text**.
 
 - An offscreen `<canvas id="sample">` is the *only* canvas — it exists
   solely to call `drawImage(video, ...)` and `getImageData()` to sample the
@@ -134,15 +135,22 @@ quantized gray level → ASCII character → grayscale DOM text**.
   moving it into an async continuation after a `fetch()` await can break
   autoplay in some browsers.
 
-## Where this is headed (see the design doc)
+## Deployment (Vercel)
 
-`docs/superpowers/specs/2026-07-05-vercel-migration-design.md` is an
-**approved but not-yet-implemented** design for deploying this properly:
-replace `server.py`'s full-mp4-download with a Vercel Python serverless
-function (`api/resolve.py`) that calls yt-dlp's
-`extract_info(url, download=False)` to get a direct CDN stream URL and
-hands that straight to the browser — no download, no re-hosting, no local
-server. Explicitly deferred/out of scope (their own future projects, not
-partially-built here): an embeddable widget/snippet generator for
-third-party sites, auth, rate limiting. Read that doc before starting the
-Vercel migration work.
+Implements `docs/superpowers/specs/2026-07-05-vercel-migration-design.md`.
+Structure: `index.html` (static, served at `/`), `api/resolve.py` (Python
+serverless function at `/api/resolve`), `requirements.txt` (`yt-dlp`),
+`.vercelignore` (keeps `server.py`/`ascii_video.py`/artifacts out of the
+deploy). Zero-config — no `vercel.json`. Deploy with `vercel` / `vercel --prod`
+(needs `vercel login` first).
+
+`api/resolve.py` calls yt-dlp's `extract_info(url, download=False)` to get a
+direct progressive-mp4 CDN URL and returns `{"streamUrl","title"}` — no
+download, no re-hosting. **Known risk (accepted in the spec):** those
+`googlevideo.com` URLs can be IP/session-locked (resolved from Vercel's IP,
+played from the user's) and may not send CORS headers, which can break both
+playback and the canvas `getImageData` the renderer needs (`<video>` has
+`crossorigin="anonymous"` so it *can* sample when CORS is present). The
+documented escape hatch if this proves unreliable is proxying/downloading
+through the function. Still out of scope: embed/snippet generator, auth, rate
+limiting.
