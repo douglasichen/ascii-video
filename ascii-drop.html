@@ -7,7 +7,7 @@
   #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
   #bar button { font-family:monospace; font-size:14px; padding:6px 12px; }
   #status { position:fixed; top:56px; left:12px; color:#888; font-size:13px; z-index:1; }
-  #fps { position:fixed; bottom:8px; left:12px; color:#0f0; font-family:monospace; font-size:13px; z-index:1; }
+  #fps { position:fixed; bottom:8px; left:12px; color:#0f0; font-family:monospace; font-size:13px; z-index:1; cursor:pointer; }
   #config { position:fixed; top:56px; right:12px; z-index:1; background:#111; border:1px solid #333; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
   .ctrl { display:flex; align-items:center; gap:8px; color:#aaa; font-size:12px; }
   .ctrl label { width:80px; }
@@ -113,7 +113,8 @@ for (let v = 0; v < 256; v++) {
 const CONTRAST_LUT = new Uint8ClampedArray(256);
 
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
-let peakMs = 0, peakD = 0, peakB = 0, peakDom = 0; // worst single frame in the interval + its phase split
+let worstMs = 0, worstD = 0, worstB = 0, worstDom = 0; // worst single frame since load — STICKY, click #fps to reset
+fpsEl.addEventListener("click", () => { worstMs = worstD = worstB = worstDom = 0; });
 function renderFrame(now) {
   if (!video.paused && !video.ended && rows) {
     const tDraw = performance.now();
@@ -153,15 +154,18 @@ function renderFrame(now) {
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom;
     drawMs += d; buildMs += b; domMs += dom;
-    if (d + b + dom > peakMs) { peakMs = d + b + dom; peakD = d; peakB = b; peakDom = dom; }
+    if (d + b + dom > worstMs) { // new worst frame: pin it and log a timestamped record
+      worstMs = d + b + dom; worstD = d; worstB = b; worstDom = dom;
+      console.log(`worst frame ${worstMs.toFixed(0)}ms @ ${cols}×${rows}: draw ${d.toFixed(1)} build ${b.toFixed(1)} dom ${dom.toFixed(1)}`);
+    }
     fpsCount++;
     if (now - fpsLast >= 500) {
       const n = fpsCount;
       fpsEl.textContent = `${Math.round(n * 1000 / (now - fpsLast))} fps · ${cols}×${rows} · `
         + `avg d${(drawMs / n).toFixed(1)} b${(buildMs / n).toFixed(1)} dom${(domMs / n).toFixed(1)} · `
-        + `peak ${peakMs.toFixed(0)}ms (d${peakD.toFixed(0)} b${peakB.toFixed(0)} dom${peakDom.toFixed(0)})`;
+        + `worst ${worstMs.toFixed(0)}ms (d${worstD.toFixed(0)} b${worstB.toFixed(0)} dom${worstDom.toFixed(0)}) ⟳`;
       fpsLast = now;
-      fpsCount = drawMs = buildMs = domMs = peakMs = 0;
+      fpsCount = drawMs = buildMs = domMs = 0;
     }
   }
   requestAnimationFrame(renderFrame);
