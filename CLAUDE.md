@@ -63,19 +63,20 @@ quantized gray level → ASCII character → grayscale DOM text**.
   **the** performance mechanism: the whole render is bottlenecked by span
   count (build time, `innerHTML` parse, layout, and paint all scale with
   it), not by the per-pixel math. See the perf notes below.
-- **Perf / why grayscale-only (color is a deferred feature).** Output
-  luminance is quantized to 8 gray levels (`QUANT_LEVEL`/`LEVEL_CLASS`,
-  precomputed once), so a whole frame contains at most 8 distinct colors →
-  neighbouring cells constantly match → runs merge into long spans → few
-  spans. (Was 16; dropped to 8 because it roughly halves the span count with
-  banding still hidden by the char ramp — span count is the render's
-  bottleneck.) Full RGB color was removed because independent channels give
-  16³ = 4096 possible colors, which shatters the merge (5–10× more spans,
-  measured) and tanked FPS. Color is **deferred, not gone**: to bring it
-  back, keep the quantization but use a coarser palette in color mode
-  (colour banding hides far better than gray banding) and expect to cap the
-  grid harder. The old color path (a `gray` 0–100% slider mixing luminance
-  back toward source RGB) is in git history. Other hot-loop specifics: the
+- **Perf / why one base colour, not per-cell RGB.** Output luminance is
+  quantized to 8 levels (`QUANT_LEVEL`/`LEVEL_CLASS`, precomputed once), so a
+  whole frame contains at most 8 distinct colours → neighbouring cells
+  constantly match → runs merge into long spans → few spans. (Was 16; dropped
+  to 8 because it roughly halves the span count with banding still hidden by
+  the char ramp — span count is the render's bottleneck.) Per-cell RGB *from
+  the video* stays removed because independent channels give 16³ = 4096
+  possible colours, which shatters the merge (5–10× more spans, measured) and
+  tanks FPS. But a single user-chosen **base colour** is free: `buildPalette()`
+  ramps the 8 level classes from black → that colour (white = the classic gray
+  ramp), so it's still ≤ 8 colours/frame and merging is untouched. It rebuilds
+  that one `<style>` on change and sets `#screen.style.color` for turbo's flat
+  text. The old per-cell-from-video path (a `gray` 0–100% slider mixing
+  luminance back toward source RGB) is in git history. Other hot-loop specifics: the
   offscreen canvas uses `willReadFrequently:true` (CPU-backed, avoids
   GPU-readback stalls on `getImageData`); a per-frame 256-entry contrast LUT
   replaces per-pixel `adjustContrast` calls; colors are compared as the
@@ -104,10 +105,12 @@ quantized gray level → ASCII character → grayscale DOM text**.
   friendly 1–8 scale to the internal font size (1 = chunky/20px, 8 =
   fine/6px). Capped at 8 (default 6) on purpose: finer than that the cell
   count explodes span count faster than it adds usable detail.
-- All tunable parameters (`detail`, `contrast`, `turbo`) live in one `CONTROLS`
-  object that drives both the generated slider UI and the `state` object
-  read each frame — add a new tunable parameter there rather than wiring up
-  ad hoc sliders.
+- All tunable parameters (`detail`, `contrast`, `turbo`, `color`) live in one
+  `CONTROLS` object that drives both the generated control UI and the `state`
+  object read each frame — add a new tunable parameter there rather than wiring
+  up ad hoc controls. Entries are range sliders by default; `type: "color"`
+  renders an `<input type=color>` instead (and its `input` value is kept as the
+  hex string, not coerced to a Number).
 - The frame render lives in `paint()` (draw→build→dom), split out of the rVFC
   loop so it can be called on demand. `setControl()` calls `paint()` after every
   control change so adjustments preview immediately **even while paused** — the
