@@ -121,7 +121,15 @@ const CONTRAST_LUT = new Uint8ClampedArray(256);
 const PARTS = [];
 
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
-let lastVt = 0; // last video.currentTime, to detect loop wrap (decode stall on wrap is not a render cost)
+let lastVt = 0; // last video frame time, to detect loop wrap (decode stall on wrap is not a render cost)
+// Render once per PRESENTED VIDEO FRAME, not per display refresh: a 30fps video on a 60/120Hz screen
+// was rebuilt 2-4x per frame for identical output. requestVideoFrameCallback fires exactly per new
+// frame -> halves+ the build/dom/getImageData work and the GC that rides on it. Re-registers itself
+// (always, even when the work is skipped) so it self-heals across pause/resume. rAF is the fallback.
+function scheduleFrame() {
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(renderFrame);
+  else requestAnimationFrame(renderFrame);
+}
 // Ranked list of the worst frames since load, worst -> best. Lives on window so it survives and can
 // be dumped on demand: run `dumpWorst()` in the console, or read the "[WORST]" log line. Loop-wrap
 // frames are excluded (decode stall, not render cost). Click #fps to reset the list.
@@ -133,7 +141,7 @@ function logWorst() {
 }
 window.dumpWorst = logWorst;
 fpsEl.addEventListener("click", () => { worst.length = 0; console.log("[WORST] reset"); });
-function renderFrame(now) {
+function renderFrame(now, metadata) {
   if (!video.paused && !video.ended && rows) {
     const tDraw = performance.now();
     ctx.drawImage(video, 0, 0, cols, rows);
@@ -166,8 +174,9 @@ function renderFrame(now) {
     void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
-    const looped = video.currentTime < lastVt; // wrapped to start -> decode stall, skip this frame
-    lastVt = video.currentTime;
+    const vt = metadata ? metadata.mediaTime : video.currentTime; // rVFC gives the exact frame time
+    const looped = vt < lastVt; // wrapped to start -> decode stall, skip this frame
+    lastVt = vt;
     drawMs += d; buildMs += b; domMs += dom;
     if (!looped && (worst.length < WORST_N || total > worst[worst.length - 1].ms)) {
       const record = total > (worst.length ? worst[0].ms : 0); // new all-time worst?
@@ -187,9 +196,9 @@ function renderFrame(now) {
       fpsCount = drawMs = buildMs = domMs = 0;
     }
   }
-  requestAnimationFrame(renderFrame);
+  scheduleFrame(); // re-register unconditionally so the chain survives skipped/paused frames
 }
-requestAnimationFrame(renderFrame);
+scheduleFrame();
 
 async function loadUrl(youtubeUrl) {
   if (!youtubeUrl) return;
