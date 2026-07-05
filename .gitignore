@@ -2,3 +2,4 @@ current.mp4
 videoplayback.html
 __pycache__/
 *.pyc
+.venv/

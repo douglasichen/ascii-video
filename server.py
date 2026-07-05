@@ -23,11 +23,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         url = (query.get("url") or [""])[0]
         if not url:
             return self.respond_json(400, {"error": "missing url"})
-        if os.path.exists(VIDEO_FILE):
-            os.remove(VIDEO_FILE)
+        for f in (VIDEO_FILE, VIDEO_FILE + ".part"):
+            if os.path.exists(f):
+                os.remove(f)
         try:
             subprocess.run(
-                ["yt-dlp", "-f", "mp4/best[ext=mp4]/best", "-o", VIDEO_FILE, url],
+                # --http-chunk-size is the canonical fix for YouTube "HTTP Error 416":
+                # the CDN rejects one big ranged request on DASH formats but accepts chunks.
+                ["yt-dlp", "-f", "mp4/best[ext=mp4]/best",
+                 "--http-chunk-size", "10M", "--no-part",
+                 "--retries", "5", "--fragment-retries", "5",
+                 "-o", VIDEO_FILE, url],
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as e:

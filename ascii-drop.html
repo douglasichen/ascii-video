@@ -7,6 +7,7 @@
   #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
   #bar button { font-family:monospace; font-size:14px; padding:6px 12px; }
   #status { position:fixed; top:56px; left:12px; color:#888; font-size:13px; z-index:1; }
+  #fps { position:fixed; bottom:8px; left:12px; color:#0f0; font-family:monospace; font-size:13px; z-index:1; }
   #config { position:fixed; top:56px; right:12px; z-index:1; background:#111; border:1px solid #333; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
   .ctrl { display:flex; align-items:center; gap:8px; color:#aaa; font-size:12px; }
   .ctrl label { width:80px; }
@@ -21,6 +22,7 @@
   <button id="load">Load</button>
 </div>
 <div id="status"></div>
+<div id="fps"></div>
 <div id="config"></div>
 <canvas id="sample" style="display:none"></canvas>
 <video id="video" style="display:none" loop playsinline></video>
@@ -31,12 +33,12 @@ const video = document.getElementById("video");
 const screen = document.getElementById("screen");
 const status = document.getElementById("status");
 const canvas = document.getElementById("sample");
+const fpsEl = document.getElementById("fps");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 let cols = 0, rows = 0;
 
 const CONTROLS = {
-  detail: { label: "detail", min: 1, max: 10, step: 1, default: 8, unit: "" },
-  gray: { label: "color→gray", min: 0, max: 100, step: 1, default: 100, unit: "%" },
+  detail: { label: "detail", min: 1, max: 8, step: 1, default: 6, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
 };
 const state = {};
@@ -92,45 +94,75 @@ function computeGrid() {
 function onMetadata() { computeGrid(); }
 window.addEventListener("resize", computeGrid);
 
-function adjustContrast(v, factor) {
-  return Math.min(255, Math.max(0, (v - 128) * factor + 128));
+const RAMP_LAST = RAMP.length - 1;
+const RAMP_SCALE = RAMP.length / 255;
+// Grayscale only. Quantize luminance to 16 levels so the whole frame has at most 16 distinct
+// colors -> adjacent cells share a color -> runs MERGE -> few <span>s -> cheap build + innerHTML.
+// (Color was removed: independent RGB channels give 16^3 colors, shattering the merge -> 5-10x more
+// spans -> tanked FPS. See git history / bench if it's ever wanted back.) Only 16 colors exist, so
+// precompute their hex strings once -> zero per-run string building. Preserves pure 0 and 255.
+const QUANT_LUT = new Uint8Array(256); // luminance -> quantized gray level (compare key)
+const QUANT_CSS = new Array(256);      // luminance -> "#rrggbb" for that level
+for (let v = 0; v < 256; v++) {
+  const q = (v >> 4) * 17;
+  QUANT_LUT[v] = q;
+  const h = q.toString(16).padStart(2, "0");
+  QUANT_CSS[v] = "#" + h + h + h;
 }
+// contrast curve, rebuilt per frame (256 entries is nothing next to the pixel loop). Uint8Clamped rounds+clamps for free.
+const CONTRAST_LUT = new Uint8ClampedArray(256);
 
-function renderFrame() {
+let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
+let peakMs = 0, peakD = 0, peakB = 0, peakDom = 0; // worst single frame in the interval + its phase split
+function renderFrame(now) {
   if (!video.paused && !video.ended && rows) {
+    const tDraw = performance.now();
     ctx.drawImage(video, 0, 0, cols, rows);
     const data = ctx.getImageData(0, 0, cols, rows).data;
+    const tBuild = performance.now();
     const contrastFactor = state.contrast / 50; // 50% = neutral (factor 1)
-    const grayT = state.gray / 100; // 0 = original color, 1 = full grayscale
+    const clut = CONTRAST_LUT;
+    for (let v = 0; v < 256; v++) clut[v] = (v - 128) * contrastFactor + 128;
 
-    const rowsHtml = [];
+    let out = "";
     for (let r = 0; r < rows; r++) {
-      let rowHtml = "";
-      let runColor = null;
+      let runQ = -1; // no color is -1; quantized gray is 0..255
+      let runCss = "";
       let runChars = "";
-      for (let c = 0; c < cols; c++) {
-        const i = (r * cols + c) * 4;
-        const cr = adjustContrast(data[i], contrastFactor);
-        const cg = adjustContrast(data[i + 1], contrastFactor);
-        const cb = adjustContrast(data[i + 2], contrastFactor);
-        const gray = cr * 0.299 + cg * 0.587 + cb * 0.114;
-        const dr = (cr + (gray - cr) * grayT) | 0;
-        const dg = (cg + (gray - cg) * grayT) | 0;
-        const db = (cb + (gray - cb) * grayT) | 0;
-        const char = RAMP[Math.min(RAMP.length - 1, Math.floor((gray / 255) * RAMP.length))];
-        const color = `rgb(${dr},${dg},${db})`;
-        if (color !== runColor) {
-          if (runColor !== null) rowHtml += `<span style="color:${runColor}">${runChars}</span>`;
-          runColor = color;
+      let base = r * cols * 4;
+      for (let c = 0; c < cols; c++, base += 4) {
+        const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
+        const gi = gray | 0;
+        const q = QUANT_LUT[gi];
+        const char = RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST];
+        if (q !== runQ) {
+          if (runQ !== -1) out += `<span style="color:${runCss}">${runChars}</span>`;
+          runQ = q;
+          runCss = QUANT_CSS[gi]; // precomputed, no per-run string building
           runChars = char;
         } else {
           runChars += char;
         }
       }
-      rowHtml += `<span style="color:${runColor}">${runChars}</span>`;
-      rowsHtml.push(rowHtml);
+      out += `<span style="color:${runCss}">${runChars}</span>`;
+      if (r < rows - 1) out += "\n";
     }
-    screen.innerHTML = rowsHtml.join("\n");
+    const tDom = performance.now();
+    screen.innerHTML = out;
+    void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
+    const tEnd = performance.now();
+    const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom;
+    drawMs += d; buildMs += b; domMs += dom;
+    if (d + b + dom > peakMs) { peakMs = d + b + dom; peakD = d; peakB = b; peakDom = dom; }
+    fpsCount++;
+    if (now - fpsLast >= 500) {
+      const n = fpsCount;
+      fpsEl.textContent = `${Math.round(n * 1000 / (now - fpsLast))} fps · ${cols}×${rows} · `
+        + `avg d${(drawMs / n).toFixed(1)} b${(buildMs / n).toFixed(1)} dom${(domMs / n).toFixed(1)} · `
+        + `peak ${peakMs.toFixed(0)}ms (d${peakD.toFixed(0)} b${peakB.toFixed(0)} dom${peakDom.toFixed(0)})`;
+      fpsLast = now;
+      fpsCount = drawMs = buildMs = domMs = peakMs = 0;
+    }
   }
   requestAnimationFrame(renderFrame);
 }

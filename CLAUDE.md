@@ -45,8 +45,8 @@ base64-embedded audio track.
 ## Architecture: the live player's rendering pipeline
 
 `ascii-drop.html` is a single self-contained file (no build step, no
-framework). Pipeline, in order: **video → per-pixel filters (contrast,
-color→gray) → luminance → ASCII character → colored DOM text**.
+framework). Pipeline, in order: **video → contrast filter → luminance →
+quantized gray level → ASCII character → grayscale DOM text**.
 
 - An offscreen `<canvas id="sample">` is the *only* canvas — it exists
   solely to call `drawImage(video, ...)` and `getImageData()` to sample the
@@ -57,11 +57,29 @@ color→gray) → luminance → ASCII character → colored DOM text**.
   characters and reverted — rasterized glyphs go blurry when the page is
   zoomed, since it's a fixed-resolution bitmap rather than font rendering.
   DOM text stays crisp at any zoom.
-- Per-character color is achieved by building each row's HTML as a
-  sequence of `<span style="color:rgb(...)">` runs — adjacent same-color
-  characters are merged into one span (cheap single-pass optimization,
-  keeps markup size down for large flat-color regions) rather than one span
-  per character.
+- Per-character shading is achieved by building each row's HTML as a
+  sequence of `<span style="color:#rrggbb">` runs — adjacent same-color
+  characters are merged into one span. This merge is not a nicety, it is
+  **the** performance mechanism: the whole render is bottlenecked by span
+  count (build time, `innerHTML` parse, layout, and paint all scale with
+  it), not by the per-pixel math. See the perf notes below.
+- **Perf / why grayscale-only (color is a deferred feature).** Output
+  luminance is quantized to 16 gray levels (`QUANT_LUT`/`QUANT_CSS`,
+  precomputed once), so a whole frame contains at most 16 distinct colors →
+  neighbouring cells constantly match → runs merge into long spans → few
+  spans. Full RGB color was removed because independent channels give
+  16³ = 4096 possible colors, which shatters the merge (5–10× more spans,
+  measured) and tanked FPS. Color is **deferred, not gone**: to bring it
+  back, keep the quantization but use a coarser palette in color mode
+  (colour banding hides far better than gray banding) and expect to cap the
+  grid harder. The old color path (a `gray` 0–100% slider mixing luminance
+  back toward source RGB) is in git history. Other hot-loop specifics: the
+  offscreen canvas uses `willReadFrequently:true` (CPU-backed, avoids
+  GPU-readback stalls on `getImageData`); a per-frame 256-entry contrast LUT
+  replaces per-pixel `adjustContrast` calls; colors are compared as the
+  quantized int key, never as freshly-built strings. The `#fps` readout is a
+  live profiler (avg draw/build/dom split + worst-frame peak) — leave it or
+  gate it behind a flag, but it's how you attribute any FPS drop to a phase.
 - **Known footgun:** `#screen` must NOT have `display:flex`. It was
   centered with flex+align-items+justify-content early on, which broke
   multi-line rendering — each per-color `<span>` becomes its own flex item,
@@ -70,15 +88,16 @@ color→gray) → luminance → ASCII character → colored DOM text**.
   is done instead via `position:fixed; top:50%; left:50%;
   transform:translate(-50%,-50%)`, which doesn't touch the `<pre>`'s normal
   inline formatting context.
-- The **detail** slider is intentionally a 1–10 scale, not a raw pixel
+- The **detail** slider is intentionally a 1–8 scale, not a raw pixel
   size. It used to be a font-px control, but smaller-px-means-more-detail
   is backwards from intuition; `fontPx = 22 - detail*2` converts the
-  friendly 1–10 scale to the internal font size (1 = chunky/20px, 10 =
-  fine/2px).
-- All tunable parameters (`detail`, `gray`, `contrast`) live in one
-  `CONTROLS` object that drives both the generated slider UI and the
-  `state` object read each frame — add a new tunable parameter there rather
-  than wiring up ad hoc sliders.
+  friendly 1–8 scale to the internal font size (1 = chunky/20px, 8 =
+  fine/6px). Capped at 8 (default 6) on purpose: finer than that the cell
+  count explodes span count faster than it adds usable detail.
+- All tunable parameters (`detail`, `contrast`) live in one `CONTROLS`
+  object that drives both the generated slider UI and the `state` object
+  read each frame — add a new tunable parameter there rather than wiring up
+  ad hoc sliders.
 - Autoplay-with-sound only works because `video.play()` is called
   synchronously inside the Load button's click handler (a user gesture);
   moving it into an async continuation after a `fetch()` await can break
