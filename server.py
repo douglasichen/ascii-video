@@ -11,6 +11,12 @@ VIDEO_FILE = "current.mp4"
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        # Local dev tool that's edited constantly — never let the browser cache a stale page/mp4,
+        # or a reload silently serves the old build. (Bit us: edits didn't show until a hard reload.)
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/download":

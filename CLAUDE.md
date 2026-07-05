@@ -104,10 +104,16 @@ quantized gray level → ASCII character → grayscale DOM text**.
   friendly 1–8 scale to the internal font size (1 = chunky/20px, 8 =
   fine/6px). Capped at 8 (default 6) on purpose: finer than that the cell
   count explodes span count faster than it adds usable detail.
-- All tunable parameters (`detail`, `contrast`) live in one `CONTROLS`
+- All tunable parameters (`detail`, `contrast`, `turbo`) live in one `CONTROLS`
   object that drives both the generated slider UI and the `state` object
   read each frame — add a new tunable parameter there rather than wiring up
   ad hoc sliders.
+- The frame render lives in `paint()` (draw→build→dom), split out of the rVFC
+  loop so it can be called on demand. `setControl()` calls `paint()` after every
+  control change so adjustments preview immediately **even while paused** — the
+  loop is gated on `!video.paused`, so without this a paused `detail` change only
+  swapped the font size on stale text and scaled it (looked like a zoom). See
+  `docs/optimization-notes.md`.
 - Autoplay-with-sound only works because `video.play()` is called
   synchronously inside the Load button's click handler (a user gesture);
   moving it into an async continuation after a `fetch()` await can break

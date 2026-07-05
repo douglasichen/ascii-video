@@ -67,6 +67,11 @@ function setControl(key, value) {
   document.getElementById(`ctrl-${key}`).value = value;
   document.getElementById(`val-${key}`).textContent = value + CONTROLS[key].unit;
   if (key === "detail") computeGrid();
+  // Re-sample the current frame at the new grid RIGHT NOW. The render loop is idle while the video is
+  // paused, so without this a detail change would only swap the font size on the stale text — scaling
+  // it, which looks like a zoom. Repainting resamples at the new resolution so paused (and mid-play)
+  // adjustments preview live at a fixed on-screen size. No-op until a video frame exists.
+  if (video.videoWidth && rows) paint();
 }
 
 for (const key in CONTROLS) {
@@ -154,46 +159,54 @@ function logWorst() {
 }
 window.dumpWorst = logWorst;
 fpsEl.addEventListener("click", () => { worst.length = 0; console.log("[WORST] reset"); });
+// Sample the current video frame and rebuild the ASCII at the CURRENT cols/rows. Split out of the loop
+// so a control change can re-render on demand (see setControl) — the loop is the only *other* caller.
+// Returns the per-phase timings so the loop can profile; callers that just want a refresh ignore them.
+function paint() {
+  const tDraw = performance.now();
+  ctx.drawImage(video, 0, 0, cols, rows);
+  const data = ctx.getImageData(0, 0, cols, rows).data;
+  const tBuild = performance.now();
+  const contrastFactor = state.contrast / 50; // 50% = neutral (factor 1)
+  const clut = CONTRAST_LUT;
+  for (let v = 0; v < 256; v++) clut[v] = (v - 128) * contrastFactor + 128;
+
+  const parts = PARTS;
+  parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
+  const shade = !state.turbo; // grayscale spans vs plain text
+  for (let r = 0; r < rows; r++) {
+    let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
+    let base = r * cols * 4;
+    for (let c = 0; c < cols; c++, base += 4) {
+      const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
+      if (shade) {
+        const lv = QUANT_LEVEL[gray | 0];
+        if (lv !== runLv) {
+          if (runLv !== -1) parts.push("</i>");
+          parts.push("<i class=", LEVEL_CLASS[lv], ">");
+          runLv = lv;
+        }
+      }
+      parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
+    }
+    if (shade) parts.push("</i>");
+    if (r < rows - 1) parts.push("\n");
+  }
+  const tDom = performance.now();
+  // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
+  if (shade) screen.innerHTML = parts.join("");
+  else screen.textContent = parts.join("");
+  void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
+  const tEnd = performance.now();
+  return { d: tBuild - tDraw, b: tDom - tBuild, dom: tEnd - tDom };
+}
+
 function renderFrame(now, metadata) {
   if (metadata) lastPresented = metadata.presentedFrames; // count video frames even on skipped renders, so "drop" stays honest
   if (!video.paused && !video.ended && rows && now - lastRender >= MIN_FRAME_MS) {
     lastRender = now;
-    const tDraw = performance.now();
-    ctx.drawImage(video, 0, 0, cols, rows);
-    const data = ctx.getImageData(0, 0, cols, rows).data;
-    const tBuild = performance.now();
-    const contrastFactor = state.contrast / 50; // 50% = neutral (factor 1)
-    const clut = CONTRAST_LUT;
-    for (let v = 0; v < 256; v++) clut[v] = (v - 128) * contrastFactor + 128;
-
-    const parts = PARTS;
-    parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
-    const shade = !state.turbo; // grayscale spans vs plain text
-    for (let r = 0; r < rows; r++) {
-      let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
-      let base = r * cols * 4;
-      for (let c = 0; c < cols; c++, base += 4) {
-        const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
-        if (shade) {
-          const lv = QUANT_LEVEL[gray | 0];
-          if (lv !== runLv) {
-            if (runLv !== -1) parts.push("</i>");
-            parts.push("<i class=", LEVEL_CLASS[lv], ">");
-            runLv = lv;
-          }
-        }
-        parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
-      }
-      if (shade) parts.push("</i>");
-      if (r < rows - 1) parts.push("\n");
-    }
-    const tDom = performance.now();
-    // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
-    if (shade) screen.innerHTML = parts.join("");
-    else screen.textContent = parts.join("");
-    void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
-    const tEnd = performance.now();
-    const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
+    const { d, b, dom } = paint();
+    const total = d + b + dom;
     const vt = metadata ? metadata.mediaTime : video.currentTime; // rVFC gives the exact frame time
     const looped = vt < lastVt; // wrapped to start -> decode stall, skip this frame
     lastVt = vt;
