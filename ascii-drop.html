@@ -1,0 +1,163 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ASCII drop player</title>
+<style>
+  html, body { margin:0; height:100%; background:#000; font-family:monospace; overflow:hidden; }
+  #screen { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); margin:0; white-space:pre; line-height:1; }
+  #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; padding:12px; background:#000; z-index:1; }
+  #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
+  #bar button { font-family:monospace; font-size:14px; padding:6px 12px; }
+  #status { position:fixed; top:56px; left:12px; color:#888; font-size:13px; z-index:1; }
+  #config { position:fixed; top:56px; right:12px; z-index:1; background:#111; border:1px solid #333; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+  .ctrl { display:flex; align-items:center; gap:8px; color:#aaa; font-size:12px; }
+  .ctrl label { width:80px; }
+  .ctrl input[type=range] { flex:1; }
+  .ctrl span { width:38px; text-align:right; color:#888; }
+  .ctrl button { font-size:11px; padding:2px 6px; }
+</style></head>
+<body>
+<pre id="screen"></pre>
+<div id="bar">
+  <input id="url" type="text" placeholder="paste a YouTube link and hit Load">
+  <button id="load">Load</button>
+</div>
+<div id="status"></div>
+<div id="config"></div>
+<canvas id="sample" style="display:none"></canvas>
+<video id="video" style="display:none" loop playsinline></video>
+<script>
+const RAMP = " .:-=+*#%@";
+const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
+const video = document.getElementById("video");
+const screen = document.getElementById("screen");
+const status = document.getElementById("status");
+const canvas = document.getElementById("sample");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+let cols = 0, rows = 0;
+
+const CONTROLS = {
+  detail: { label: "detail", min: 1, max: 10, step: 1, default: 8, unit: "" },
+  gray: { label: "color→gray", min: 0, max: 100, step: 1, default: 100, unit: "%" },
+  contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
+};
+const state = {};
+for (const key in CONTROLS) state[key] = CONTROLS[key].default;
+
+const configEl = document.getElementById("config");
+for (const key in CONTROLS) {
+  const c = CONTROLS[key];
+  const row = document.createElement("div");
+  row.className = "ctrl";
+  row.innerHTML = `
+    <label>${c.label}</label>
+    <input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">
+    <span id="val-${key}">${c.default}${c.unit}</span>
+    <button data-key="${key}">reset</button>`;
+  configEl.appendChild(row);
+}
+
+function setControl(key, value) {
+  state[key] = value;
+  document.getElementById(`ctrl-${key}`).value = value;
+  document.getElementById(`val-${key}`).textContent = value + CONTROLS[key].unit;
+  if (key === "detail") computeGrid();
+}
+
+for (const key in CONTROLS) {
+  document.getElementById(`ctrl-${key}`).addEventListener("input", e => setControl(key, Number(e.target.value)));
+}
+configEl.addEventListener("click", e => {
+  const key = e.target.dataset.key;
+  if (key) setControl(key, CONTROLS[key].default);
+});
+
+function computeGrid() {
+  if (!video.videoWidth) return;
+  const fontPx = 22 - state.detail * 2; // detail 1 (chunky) .. 10 (fine) -> 20px .. 2px
+  const maxCols = Math.floor(window.innerWidth / (fontPx * 0.6));
+  const maxRows = Math.floor(window.innerHeight / fontPx);
+  const videoRatio = (video.videoHeight / video.videoWidth) * CHAR_ASPECT;
+  cols = maxCols;
+  rows = Math.round(cols * videoRatio);
+  if (rows > maxRows) {
+    rows = maxRows;
+    cols = Math.round(rows / videoRatio);
+  }
+  cols = Math.max(1, cols);
+  rows = Math.max(1, rows);
+  canvas.width = cols;
+  canvas.height = rows;
+  screen.style.fontSize = fontPx + "px";
+}
+
+function onMetadata() { computeGrid(); }
+window.addEventListener("resize", computeGrid);
+
+function adjustContrast(v, factor) {
+  return Math.min(255, Math.max(0, (v - 128) * factor + 128));
+}
+
+function renderFrame() {
+  if (!video.paused && !video.ended && rows) {
+    ctx.drawImage(video, 0, 0, cols, rows);
+    const data = ctx.getImageData(0, 0, cols, rows).data;
+    const contrastFactor = state.contrast / 50; // 50% = neutral (factor 1)
+    const grayT = state.gray / 100; // 0 = original color, 1 = full grayscale
+
+    const rowsHtml = [];
+    for (let r = 0; r < rows; r++) {
+      let rowHtml = "";
+      let runColor = null;
+      let runChars = "";
+      for (let c = 0; c < cols; c++) {
+        const i = (r * cols + c) * 4;
+        const cr = adjustContrast(data[i], contrastFactor);
+        const cg = adjustContrast(data[i + 1], contrastFactor);
+        const cb = adjustContrast(data[i + 2], contrastFactor);
+        const gray = cr * 0.299 + cg * 0.587 + cb * 0.114;
+        const dr = (cr + (gray - cr) * grayT) | 0;
+        const dg = (cg + (gray - cg) * grayT) | 0;
+        const db = (cb + (gray - cb) * grayT) | 0;
+        const char = RAMP[Math.min(RAMP.length - 1, Math.floor((gray / 255) * RAMP.length))];
+        const color = `rgb(${dr},${dg},${db})`;
+        if (color !== runColor) {
+          if (runColor !== null) rowHtml += `<span style="color:${runColor}">${runChars}</span>`;
+          runColor = color;
+          runChars = char;
+        } else {
+          runChars += char;
+        }
+      }
+      rowHtml += `<span style="color:${runColor}">${runChars}</span>`;
+      rowsHtml.push(rowHtml);
+    }
+    screen.innerHTML = rowsHtml.join("\n");
+  }
+  requestAnimationFrame(renderFrame);
+}
+requestAnimationFrame(renderFrame);
+
+async function loadUrl(youtubeUrl) {
+  if (!youtubeUrl) return;
+  status.textContent = "downloading via yt-dlp...";
+  const res = await fetch("/download?url=" + encodeURIComponent(youtubeUrl));
+  const body = await res.json();
+  if (!res.ok) {
+    status.textContent = "error: " + body.error;
+    return;
+  }
+  status.textContent = "";
+  video.onloadedmetadata = onMetadata;
+  video.src = "/current.mp4?t=" + Date.now();
+  video.play();
+}
+
+document.getElementById("load").addEventListener("click", () => loadUrl(document.getElementById("url").value.trim()));
+document.getElementById("url").addEventListener("keydown", e => { if (e.key === "Enter") loadUrl(e.target.value.trim()); });
+
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space" || !video.src) return;
+  e.preventDefault();
+  video.paused ? video.play() : video.pause();
+});
+</script>
+</body></html>
