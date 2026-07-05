@@ -123,6 +123,8 @@ const PARTS = [];
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
 let lastVt = 0; // last video frame time, to detect loop wrap (decode stall on wrap is not a render cost)
 let lastPresented = 0, presentedAtWindow = 0; // rVFC frame counter: how many frames the VIDEO actually showed vs how many we rendered
+const MIN_FRAME_MS = 1000 / 60 - 4; // cap render at ~60fps (with jitter tolerance) — skip extra frames from 60/120fps video
+let lastRender = -1e9;
 // Render once per PRESENTED VIDEO FRAME, not per display refresh: a 30fps video on a 60/120Hz screen
 // was rebuilt 2-4x per frame for identical output. requestVideoFrameCallback fires exactly per new
 // frame -> halves+ the build/dom/getImageData work and the GC that rides on it. Re-registers itself
@@ -143,7 +145,9 @@ function logWorst() {
 window.dumpWorst = logWorst;
 fpsEl.addEventListener("click", () => { worst.length = 0; console.log("[WORST] reset"); });
 function renderFrame(now, metadata) {
-  if (!video.paused && !video.ended && rows) {
+  if (metadata) lastPresented = metadata.presentedFrames; // count video frames even on skipped renders, so "drop" stays honest
+  if (!video.paused && !video.ended && rows && now - lastRender >= MIN_FRAME_MS) {
+    lastRender = now;
     const tDraw = performance.now();
     ctx.drawImage(video, 0, 0, cols, rows);
     const data = ctx.getImageData(0, 0, cols, rows).data;
@@ -176,7 +180,6 @@ function renderFrame(now, metadata) {
     const tEnd = performance.now();
     const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
     const vt = metadata ? metadata.mediaTime : video.currentTime; // rVFC gives the exact frame time
-    if (metadata) lastPresented = metadata.presentedFrames; // total frames the video has shown so far
     const looped = vt < lastVt; // wrapped to start -> decode stall, skip this frame
     lastVt = vt;
     drawMs += d; buildMs += b; domMs += dom;
