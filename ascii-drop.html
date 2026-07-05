@@ -113,8 +113,18 @@ for (let v = 0; v < 256; v++) {
 const CONTRAST_LUT = new Uint8ClampedArray(256);
 
 let fpsCount = 0, fpsLast = 0, drawMs = 0, buildMs = 0, domMs = 0;
-let worstMs = 0, worstD = 0, worstB = 0, worstDom = 0; // worst single frame since load — STICKY, click #fps to reset
-fpsEl.addEventListener("click", () => { worstMs = worstD = worstB = worstDom = 0; });
+let lastVt = 0; // last video.currentTime, to detect loop wrap (decode stall on wrap is not a render cost)
+// Ranked list of the worst frames since load, worst -> best. Lives on window so it survives and can
+// be dumped on demand: run `dumpWorst()` in the console, or read the "[WORST]" log line. Loop-wrap
+// frames are excluded (decode stall, not render cost). Click #fps to reset the list.
+const WORST_N = 20;
+const worst = window.WORST = [];
+function logWorst() {
+  console.log("[WORST] top " + worst.length + " frames (worst→best):\n" + worst.map((w, i) =>
+    `${String(i + 1).padStart(2)}. ${w.ms.toFixed(0).padStart(3)}ms  d${w.d.toFixed(1)} b${w.b.toFixed(1)} dom${w.dom.toFixed(1)}  ${w.grid} @${w.at}ms`).join("\n"));
+}
+window.dumpWorst = logWorst;
+fpsEl.addEventListener("click", () => { worst.length = 0; console.log("[WORST] reset"); });
 function renderFrame(now) {
   if (!video.paused && !video.ended && rows) {
     const tDraw = performance.now();
@@ -152,18 +162,23 @@ function renderFrame(now) {
     screen.innerHTML = out;
     void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
     const tEnd = performance.now();
-    const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom;
+    const d = tBuild - tDraw, b = tDom - tBuild, dom = tEnd - tDom, total = d + b + dom;
+    const looped = video.currentTime < lastVt; // wrapped to start -> decode stall, skip this frame
+    lastVt = video.currentTime;
     drawMs += d; buildMs += b; domMs += dom;
-    if (d + b + dom > worstMs) { // new worst frame: pin it and log a timestamped record
-      worstMs = d + b + dom; worstD = d; worstB = b; worstDom = dom;
-      console.log(`worst frame ${worstMs.toFixed(0)}ms @ ${cols}×${rows}: draw ${d.toFixed(1)} build ${b.toFixed(1)} dom ${dom.toFixed(1)}`);
+    if (!looped && (worst.length < WORST_N || total > worst[worst.length - 1].ms)) {
+      worst.push({ ms: total, d, b, dom, grid: `${cols}×${rows}`, at: Math.round(now) });
+      worst.sort((x, y) => y.ms - x.ms);
+      if (worst.length > WORST_N) worst.length = WORST_N;
+      logWorst();
     }
     fpsCount++;
     if (now - fpsLast >= 500) {
       const n = fpsCount;
+      const w = worst[0];
       fpsEl.textContent = `${Math.round(n * 1000 / (now - fpsLast))} fps · ${cols}×${rows} · `
         + `avg d${(drawMs / n).toFixed(1)} b${(buildMs / n).toFixed(1)} dom${(domMs / n).toFixed(1)} · `
-        + `worst ${worstMs.toFixed(0)}ms (d${worstD.toFixed(0)} b${worstB.toFixed(0)} dom${worstDom.toFixed(0)}) ⟳`;
+        + (w ? `worst ${w.ms.toFixed(0)}ms (d${w.d.toFixed(0)} b${w.b.toFixed(0)} dom${w.dom.toFixed(0)}) ⟳` : "");
       fpsLast = now;
       fpsCount = drawMs = buildMs = domMs = 0;
     }
