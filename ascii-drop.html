@@ -39,7 +39,7 @@ const ctx = canvas.getContext("2d", { willReadFrequently: true });
 let cols = 0, rows = 0;
 
 const CONTROLS = {
-  detail: { label: "detail", min: 1, max: 8, step: 1, default: 6, unit: "" },
+  detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
 };
 const state = {};
@@ -101,15 +101,16 @@ window.addEventListener("resize", computeGrid);
 const RAMP_LAST = RAMP.length - 1;
 const RAMP_SCALE = RAMP.length / 255;
 // Grayscale only, quantized to 16 gray levels. Each level is a CSS class (16 rules in one <style>),
-// so a cell emits `<span class=h>` (~13B) instead of `<span style="color:#rrggbb">` (~28B): ~40%
-// less markup AND the browser resolves 16 shared class styles instead of tens of thousands of inline
-// ones. On high-detail (noisy) video ~1 span/cell is unavoidable, so shrinking the per-span cost and
-// killing per-frame allocation is what tames the GC pauses that show up as huge random FPS drops.
-// (Color removed: independent RGB = 16^3 colors, shatters run-merging -> 5-10x spans. See git history.)
+// and cells emit `<i class=h>` (~11B) instead of `<span style="color:#rrggbb">` (~28B): the shortest
+// element tag + shared class styles mean far less markup AND the browser resolves 16 class styles
+// instead of tens of thousands of inline ones. On high-detail (noisy) video ~1 span/cell is
+// unavoidable, so shrinking per-span bytes + killing per-frame allocation is what tames the GC pauses
+// that show up as huge random FPS drops. (<i> is forced upright below; color removed — RGB = 16^3
+// colors shatters run-merging, see git history.)
 const LEVELS = 16;
 const QUANT_LEVEL = new Uint8Array(256); // luminance -> level index 0..LEVELS-1 (compare key + class index)
 const LEVEL_CLASS = new Array(LEVELS);   // level index -> interned class-name string ("a".."p")
-let quantCss = "";
+let quantCss = "#screen i{font-style:normal}"; // <i> defaults to italic; keep the glyphs upright
 for (let i = 0; i < LEVELS; i++) {
   const g = Math.round(i * 255 / (LEVELS - 1));
   const h = g.toString(16).padStart(2, "0");
@@ -169,13 +170,13 @@ function renderFrame(now, metadata) {
         const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
         const lv = QUANT_LEVEL[gray | 0];
         if (lv !== runLv) {
-          if (runLv !== -1) parts.push("</span>");
-          parts.push("<span class=", LEVEL_CLASS[lv], ">");
+          if (runLv !== -1) parts.push("</i>");
+          parts.push("<i class=", LEVEL_CLASS[lv], ">");
           runLv = lv;
         }
         parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
       }
-      parts.push("</span>");
+      parts.push("</i>");
       if (r < rows - 1) parts.push("\n");
     }
     const tDom = performance.now();
