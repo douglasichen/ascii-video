@@ -1,29 +1,102 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>ASCII drop player</title>
+<html><head><meta charset="utf-8"><title>ascii · youtube in text</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  html, body { margin:0; height:100%; background:#000; font-family:monospace; overflow:hidden; }
-  /* Pre-JS fallback text colour; buildPalette() then sets #screen.style.color to the chosen base colour.
-     Only matters when shading is off (flat text) — shaded <i> spans set their own tinted colour per level. */
-  #screen { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); margin:0; white-space:pre; line-height:1; color:#fff; }
-  #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; padding:12px; background:#000; z-index:1; }
-  #bar input[type=text] { flex:1; font-family:monospace; font-size:14px; background:#111; color:#fff; border:1px solid #333; padding:6px 8px; }
-  #bar button { font-family:monospace; font-size:14px; padding:6px 12px; }
-  #status { position:fixed; top:56px; left:12px; color:#888; font-size:13px; z-index:1; }
-  #fps { position:fixed; bottom:8px; left:12px; color:#0f0; font-family:monospace; font-size:13px; z-index:1; cursor:pointer; }
-  #config { position:fixed; top:56px; right:12px; z-index:1; background:#111; border:1px solid #333; padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
-  .ctrl { display:flex; align-items:center; gap:8px; color:#aaa; font-size:12px; }
-  .ctrl label { width:80px; }
-  .ctrl input[type=range] { flex:1; }
-  .ctrl input[type=color] { flex:1; height:22px; padding:0; border:1px solid #333; background:none; }
-  .ctrl input[type=checkbox] { margin:0 auto 0 0; width:16px; height:16px; } /* margin-right:auto keeps reset aligned right */
-  .ctrl span { width:38px; text-align:right; color:#888; }
-  .ctrl button { font-size:11px; padding:2px 6px; }
+  :root{
+    --bg:#08090a;
+    --surface:rgba(20,21,24,0.72);
+    --border:rgba(255,255,255,0.10);
+    --border-strong:rgba(255,255,255,0.20);
+    --text:#e9eaed;
+    --muted:#868b93;
+    --faint:#43474e;
+    --shadow:0 12px 40px rgba(0,0,0,0.55);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);font-family:var(--mono);overflow:hidden;color:var(--text);}
+  body{-webkit-font-smoothing:antialiased;}
+
+  /* the ASCII art — the hero. Its colour is user-chosen (buildPalette); the chrome stays monochrome so
+     it never competes. This is also the pre-JS fallback colour, and the flat colour when shading is off. */
+  #screen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;white-space:pre;line-height:1;color:#fff;}
+
+  /* command bar — a prompt to paste a link */
+  #bar{position:fixed;top:18px;left:18px;z-index:2;display:flex;align-items:center;
+       width:min(440px,calc(100vw - 36px));height:44px;padding:0 6px 0 14px;
+       background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow);}
+  #bar .prompt{color:var(--faint);font-size:14px;margin-right:9px;user-select:none;}
+  #bar input[type=text]{flex:1;min-width:0;font-family:var(--mono);font-size:13px;background:none;color:var(--text);border:none;outline:none;padding:0;height:100%;}
+  #bar input[type=text]::placeholder{color:var(--muted);}
+  #bar button{font-family:var(--mono);font-size:12px;letter-spacing:.02em;color:var(--text);background:rgba(255,255,255,0.06);
+       border:1px solid var(--border);border-radius:7px;padding:7px 15px;margin-left:8px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
+  #bar button:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
+  #bar button:active{transform:translateY(1px);}
+
+  /* status message (loading / errors) under the bar */
+  #status{position:fixed;top:70px;left:22px;z-index:2;color:var(--muted);font-size:12px;max-width:min(440px,calc(100vw - 36px));}
+
+  /* control panel — a quiet instrument. .ctrl uses display:contents so every row's cells share one grid. */
+  #config{position:fixed;top:18px;right:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
+       gap:12px 12px;align-items:center;min-width:238px;padding:15px 16px;
+       background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);}
+  .ctrl{display:contents;}
+  .ctrl label{font-size:11px;letter-spacing:.02em;color:var(--muted);white-space:nowrap;}
+  .ctrl .val{font-size:11px;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;min-width:36px;}
+  .ctrl .reset{font-family:var(--mono);font-size:13px;line-height:1;color:var(--faint);background:none;border:none;cursor:pointer;padding:2px 0;transition:color .15s,transform .2s;}
+  .ctrl .reset:hover{color:var(--text);transform:rotate(-90deg);}
+
+  /* range slider */
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:none;cursor:pointer;}
+  input[type=range]::-webkit-slider-runnable-track{height:2px;border-radius:2px;background:var(--faint);}
+  input[type=range]::-moz-range-track{height:2px;border-radius:2px;background:var(--faint);}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;margin-top:-5px;width:12px;height:12px;border-radius:50%;background:var(--text);transition:transform .1s;}
+  input[type=range]::-moz-range-thumb{border:none;width:12px;height:12px;border-radius:50%;background:var(--text);}
+  input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.18);}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px rgba(255,255,255,0.16);}
+
+  /* checkbox as a toggle switch */
+  input[type=checkbox]{appearance:none;-webkit-appearance:none;position:relative;width:30px;height:17px;border-radius:9px;background:var(--faint);cursor:pointer;transition:background .15s;margin:0;justify-self:start;}
+  input[type=checkbox]:checked{background:var(--text);}
+  input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--bg);transition:transform .15s;}
+  input[type=checkbox]:checked::after{transform:translateX(13px);}
+
+  /* colour swatch */
+  input[type=color]{appearance:none;-webkit-appearance:none;width:100%;height:20px;border:1px solid var(--border);border-radius:6px;background:none;cursor:pointer;padding:0;}
+  input[type=color]::-webkit-color-swatch-wrapper{padding:2px;}
+  input[type=color]::-webkit-color-swatch{border:none;border-radius:4px;}
+  input[type=color]::-moz-color-swatch{border:none;border-radius:4px;}
+
+  input[type=checkbox]:focus-visible,input[type=color]:focus-visible,#bar button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(255,255,255,0.20);}
+
+  /* dim debug status line — only shown when DEBUG is on */
+  #fps{position:fixed;bottom:13px;left:16px;z-index:2;color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.02em;cursor:pointer;display:none;}
+
+  /* empty state — built from the renderer's own character ramp; hidden once a video plays */
+  #empty{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;}
+  #empty .ramp{color:var(--faint);font-size:26px;letter-spacing:.42em;padding-left:.42em;margin-bottom:20px;}
+  #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
+  body.playing #empty{display:none;}
+
+  @media (max-width:560px){
+    #config{left:18px;right:18px;top:auto;bottom:18px;}
+    #bar{width:calc(100vw - 36px);}
+    #fps{display:none !important;}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style></head>
 <body>
 <pre id="screen"></pre>
+<div id="empty">
+  <div class="ramp">.:-=+*#%@</div>
+  <div class="hint">paste a youtube link to watch it in ascii</div>
+</div>
 <div id="bar">
-  <input id="url" type="text" placeholder="paste a YouTube link and hit Load">
-  <button id="load">Load</button>
+  <span class="prompt">&gt;</span>
+  <input id="url" type="text" placeholder="youtube link" spellcheck="false" autocomplete="off">
+  <button id="load">load</button>
 </div>
 <div id="status"></div>
 <div id="fps"></div>
@@ -41,6 +114,11 @@ const bar = document.getElementById("bar");
 const fpsEl = document.getElementById("fps");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 let cols = 0, rows = 0;
+
+// Debug mode, off by default. When off: the #fps profiler line is hidden, the "[WORST]" console logs
+// are suppressed, and the per-frame forced-layout measurement is skipped. Toggle live by pressing "d"
+// (outside the link box). Off is the shipped default; it's a dev/perf tool, not part of the experience.
+let DEBUG = false;
 
 const CONTROLS = {
   detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
@@ -67,11 +145,13 @@ for (const key in CONTROLS) {
   if (c.type === "color") input = `<input type="color" id="ctrl-${key}" value="${c.default}">`;
   else if (c.type === "checkbox") input = `<input type="checkbox" id="ctrl-${key}" ${c.default ? "checked" : ""}>`;
   else input = `<input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">`;
+  // Always emit the value cell (empty for non-range controls) so every row's 4 cells line up in the
+  // shared grid (.ctrl is display:contents). Reset is a subtle ↺ glyph.
   row.innerHTML = `
     <label>${c.label}</label>
     ${input}
-    ${c.type ? "" : `<span id="val-${key}">${c.default}${c.unit}</span>`}
-    <button data-key="${key}">reset</button>`;
+    <span class="val" id="val-${key}">${c.type ? "" : c.default + c.unit}</span>
+    <button class="reset" data-key="${key}" title="reset ${c.label}" aria-label="reset ${c.label}">↺</button>`;
   configEl.appendChild(row);
 }
 
@@ -79,8 +159,7 @@ function setControl(key, value) {
   state[key] = value;
   const input = document.getElementById(`ctrl-${key}`);
   if (CONTROLS[key].type === "checkbox") input.checked = value; else input.value = value;
-  const valEl = document.getElementById(`val-${key}`); // only range controls have a value readout
-  if (valEl) valEl.textContent = value + CONTROLS[key].unit;
+  if (!CONTROLS[key].type) document.getElementById(`val-${key}`).textContent = value + CONTROLS[key].unit; // only range controls show a value
   if (key === "detail") computeGrid();
   if (key === "color") buildPalette(value);
   // Re-sample the current frame at the new grid RIGHT NOW. The render loop is idle while the video is
@@ -237,7 +316,7 @@ function paint() {
   // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
   if (shade) screen.innerHTML = parts.join("");
   else screen.textContent = parts.join("");
-  void screen.offsetHeight; // force layout so its cost lands in this measurement, not later
+  if (DEBUG) void screen.offsetHeight; // force layout so its cost lands in the measurement (debug only)
   const tEnd = performance.now();
   return { d: tBuild - tDraw, b: tDom - tBuild, dom: tEnd - tDom };
 }
@@ -257,10 +336,10 @@ function renderFrame(now, metadata) {
       worst.push({ ms: total, d, b, dom, grid: `${cols}×${rows}`, at: Math.round(now) });
       worst.sort((x, y) => y.ms - x.ms);
       if (worst.length > WORST_N) worst.length = WORST_N;
-      if (record) logWorst(); // only on a new #1 (rare) — avoids console spam/jank; full list is on window.WORST, dumpWorst() anytime
+      if (DEBUG && record) logWorst(); // only on a new #1 (rare); full list is on window.WORST, dumpWorst() anytime
     }
     fpsCount++;
-    if (now - fpsLast >= 500) {
+    if (now - fpsLast >= 500) { // always resets the counters; only writes the readout when DEBUG
       const n = fpsCount, secs = (now - fpsLast) / 1000;
       const renderFps = Math.round(n / secs);
       // normalize to the video: rendered fps vs the video's own fps, and frames we couldn't keep up with
@@ -272,7 +351,7 @@ function renderFrame(now, metadata) {
         presentedAtWindow = lastPresented;
       }
       const w = worst[0];
-      fpsEl.textContent = `${head} · ${cols}×${rows} · `
+      if (DEBUG) fpsEl.textContent = `${head} · ${cols}×${rows} · `
         + `avg d${(drawMs / n).toFixed(1)} b${(buildMs / n).toFixed(1)} dom${(domMs / n).toFixed(1)} · `
         + (w ? `worst ${w.ms.toFixed(0)}ms (d${w.d.toFixed(0)} b${w.b.toFixed(0)} dom${w.dom.toFixed(0)}) ⟳` : "");
       fpsLast = now;
@@ -285,11 +364,11 @@ scheduleFrame();
 
 async function loadUrl(youtubeUrl) {
   if (!youtubeUrl) return;
-  status.textContent = "downloading via yt-dlp...";
+  status.textContent = "loading…";
   const res = await fetch("/download?url=" + encodeURIComponent(youtubeUrl));
   const body = await res.json();
   if (!res.ok) {
-    status.textContent = "error: " + body.error;
+    status.textContent = "couldn’t load — " + (body.error || "check the link and try again");
     return;
   }
   status.textContent = "";
@@ -298,13 +377,17 @@ async function loadUrl(youtubeUrl) {
   video.play();
 }
 
-document.getElementById("load").addEventListener("click", () => loadUrl(document.getElementById("url").value.trim()));
-document.getElementById("url").addEventListener("keydown", e => { if (e.key === "Enter") loadUrl(e.target.value.trim()); });
+// Reveal the ASCII, hide the empty state, once frames actually start.
+video.addEventListener("playing", () => document.body.classList.add("playing"));
+
+const urlInput = document.getElementById("url");
+document.getElementById("load").addEventListener("click", () => loadUrl(urlInput.value.trim()));
+urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadUrl(e.target.value.trim()); });
 
 document.addEventListener("keydown", e => {
-  if (e.code !== "Space" || !video.src) return;
-  e.preventDefault();
-  video.paused ? video.play() : video.pause();
+  if (document.activeElement === urlInput) return; // never hijack keys while typing a link
+  if (e.key === "d") { DEBUG = !DEBUG; fpsEl.style.display = DEBUG ? "block" : "none"; return; } // toggle profiler
+  if (e.code === "Space" && video.src) { e.preventDefault(); video.paused ? video.play() : video.pause(); }
 });
 </script>
 </body></html>

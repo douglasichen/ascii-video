@@ -81,8 +81,10 @@ quantized gray level → ASCII character → grayscale DOM text**.
   GPU-readback stalls on `getImageData`); a per-frame 256-entry contrast LUT
   replaces per-pixel `adjustContrast` calls; colors are compared as the
   quantized int key, never as freshly-built strings. The `#fps` readout is a
-  live profiler (avg draw/build/dom split + worst-frame peak) — leave it or
-  gate it behind a flag, but it's how you attribute any FPS drop to a phase.
+  live profiler (avg draw/build/dom split + worst-frame peak) gated behind
+  `DEBUG` (a JS var, off by default; press `d` outside the link box to toggle) —
+  when off it's hidden, the `[WORST]` logs are silenced, and the per-frame
+  forced-layout measurement is skipped. It's how you attribute any FPS drop to a phase.
 - **`shading` checkbox (in `CONTROLS`, default on).** When **off**, each row
   renders as plain single-colour text via `screen.textContent` instead of the
   per-cell `<i class>` tinted spans. Measured ~20× cheaper on the dom phase (no
