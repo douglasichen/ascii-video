@@ -144,6 +144,14 @@ serverless function at `/api/resolve`), `requirements.txt` (`yt-dlp`),
 deploy). Zero-config — no `vercel.json`. Deploy with `vercel` / `vercel --prod`
 (needs `vercel login` first).
 
+Input sources (`loadInput()` dispatches by type): a **video file** (drag-drop
+or ↑ upload) plays as a same-origin blob URL — the reliable path on any host,
+since a blob never has CORS/IP/bot problems; a **direct video URL** is used
+as-is (needs CORS on that host for `getImageData`); a **YouTube link** goes
+through `/api/resolve`. YouTube is now **best-effort** — from a cloud IP it
+usually bot-blocks (see below), so file/direct-URL are what make the live link
+dependable.
+
 `api/resolve.py` calls yt-dlp's `extract_info(url, download=False)` to get a
 direct progressive-mp4 CDN URL and returns `{"streamUrl","title"}` — no
 download, no re-hosting. **Known risk (accepted in the spec):** those

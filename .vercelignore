@@ -5,6 +5,7 @@ videoplayback.html
 current.mp4
 *.mp4
 docs/
+*.md
 __pycache__/
 *.pyc
 .venv/
