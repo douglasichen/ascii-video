@@ -33,6 +33,14 @@
        border:1px solid var(--border);border-radius:7px;padding:7px 15px;margin-left:8px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
   #bar button:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
   #bar button:active{transform:translateY(1px);}
+  #bar button.icon{padding:7px 10px;color:var(--muted);}
+  #bar button.icon:hover{color:var(--text);}
+
+  /* drag-over cue: a hairline frame + hint while a file is over the window */
+  #drop{position:fixed;inset:10px;z-index:5;border:1px dashed var(--border-strong);border-radius:16px;
+        display:none;align-items:center;justify-content:center;background:rgba(8,9,10,0.55);
+        backdrop-filter:blur(2px);color:var(--text);font-size:14px;letter-spacing:.02em;pointer-events:none;}
+  body.dragging #drop{display:flex;}
 
   /* status message (loading / errors) under the bar */
   #status{position:fixed;top:70px;left:22px;z-index:2;color:var(--muted);font-size:12px;max-width:min(440px,calc(100vw - 36px));}
@@ -91,14 +99,17 @@
 <pre id="screen"></pre>
 <div id="empty">
   <div class="ramp">.:-=+*#%@</div>
-  <div class="hint">paste a youtube link to watch it in ascii</div>
+  <div class="hint">paste a link, or drop a video file, to watch it in ascii</div>
 </div>
 <div id="bar">
   <span class="prompt">&gt;</span>
-  <input id="url" type="text" placeholder="youtube link" spellcheck="false" autocomplete="off">
+  <input id="url" type="text" placeholder="youtube or video link" spellcheck="false" autocomplete="off">
+  <button id="pick" class="icon" title="upload a video file" aria-label="upload a video file">↑</button>
   <button id="load">load</button>
 </div>
+<input id="file" type="file" accept="video/*" hidden>
 <div id="status"></div>
+<div id="drop">drop a video to play it in ascii</div>
 <div id="fps"></div>
 <div id="config"></div>
 <canvas id="sample" style="display:none"></canvas>
@@ -362,35 +373,67 @@ function renderFrame(now, metadata) {
 }
 scheduleFrame();
 
-// Ask the backend to resolve a YouTube link to a playable stream URL, then point <video> at it.
-// Both backends return {streamUrl}: locally it's a same-origin /current.mp4 (server.py downloads);
-// on Vercel it's a direct CDN URL (api/resolve.py). Same frontend either way.
-async function loadUrl(youtubeUrl) {
-  if (!youtubeUrl) return;
-  status.textContent = "loading…";
-  let body;
-  try {
-    const res = await fetch("/api/resolve?url=" + encodeURIComponent(youtubeUrl));
-    body = await res.json();
-    if (!res.ok) throw new Error(body.error || "");
-  } catch (err) {
-    status.textContent = "couldn’t load — " + (err.message || "check the link and try again");
-    return;
-  }
-  status.textContent = "";
+// Three ways in, all landing on playSrc():
+//  • a video FILE (drop / upload) -> a same-origin blob URL. Always samples cleanly, no CORS/IP issues.
+//  • a direct VIDEO URL -> used as-is (needs CORS on that host for getImageData; crossorigin is set).
+//  • a YOUTUBE link -> /api/resolve turns it into a stream URL. Best-effort: from a cloud host YouTube
+//    often bot-blocks the resolver, so file/direct-url are the reliable paths (see CLAUDE.md Deployment).
+function playSrc(src) {
   video.onloadedmetadata = onMetadata;
-  video.src = body.streamUrl;
+  video.src = src;
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
+}
+
+function loadFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith("video/")) { status.textContent = "that’s not a video file"; return; }
+  status.textContent = "";
+  playSrc(URL.createObjectURL(file));
+}
+
+async function loadYouTube(url) {
+  status.textContent = "loading…";
+  try {
+    const res = await fetch("/api/resolve?url=" + encodeURIComponent(url));
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "");
+    status.textContent = "";
+    playSrc(body.streamUrl);
+  } catch (err) {
+    status.textContent = "couldn’t load — " + (err.message || "try a direct video url or drop a file");
+  }
+}
+
+function loadInput(text) {
+  const s = (text || "").trim();
+  if (!s) return;
+  if (/youtu\.?be/i.test(s)) return loadYouTube(s); // youtube.com / youtu.be
+  status.textContent = "";
+  playSrc(s); // treat anything else as a direct video URL
 }
 
 // Reveal the ASCII, hide the empty state, once frames actually start.
 video.addEventListener("playing", () => document.body.classList.add("playing"));
-// A resolved CDN URL can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
-video.addEventListener("error", () => { if (video.src) status.textContent = "this video wouldn’t play — try another link"; });
+// A source can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
+video.addEventListener("error", () => { if (video.src) status.textContent = "this wouldn’t play — try a file or another link"; });
 
 const urlInput = document.getElementById("url");
-document.getElementById("load").addEventListener("click", () => loadUrl(urlInput.value.trim()));
-urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadUrl(e.target.value.trim()); });
+const fileInput = document.getElementById("file");
+document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
+document.getElementById("pick").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
+urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadInput(e.target.value); });
+
+// Drag a video file anywhere onto the page.
+let dragDepth = 0; // enter/leave fire per-element; count so the cue doesn't flicker over children
+document.addEventListener("dragenter", e => { e.preventDefault(); if (dragDepth++ === 0) document.body.classList.add("dragging"); });
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("dragleave", e => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+document.addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0; document.body.classList.remove("dragging");
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
 
 document.addEventListener("keydown", e => {
   if (document.activeElement === urlInput) return; // never hijack keys while typing a link

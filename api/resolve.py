@@ -21,6 +21,10 @@ YDL_OPTS = {
     # Progressive mp4 = one URL carrying both audio and video, so a plain <video src> can play it
     # (adaptive/DASH would need MSE). Mirrors the old CLI's -f mp4/best[ext=mp4]/best.
     "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best",
+    # From a datacenter IP (Vercel) the default web client gets "confirm you're not a bot". The mobile
+    # clients dodge that more often and don't need a PO token; try them first. Not a guaranteed fix —
+    # YouTube's bot-detection on cloud IPs is the fundamental limit of resolving without cookies.
+    "extractor_args": {"youtube": {"player_client": ["android", "ios", "tv", "web"]}},
 }
 
 
