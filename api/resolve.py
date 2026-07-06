@@ -25,7 +25,10 @@ YDL_OPTS = {
     # From a datacenter IP (Vercel) the default web client gets "confirm you're not a bot". The mobile
     # clients dodge that more often and don't need a PO token; try them first. Not a guaranteed fix —
     # YouTube's bot-detection on cloud IPs is the fundamental limit of resolving without cookies.
-    "extractor_args": {"youtube": {"player_client": ["android", "ios", "tv", "web"]}},
+    # Order matters: from a datacenter IP the android/ios clients increasingly return "No video
+    # formats found" (format URLs gated behind a PO token). tv (tv_embedded) and web_safari currently
+    # survive that more often, so lead with them. This is a moving target — YouTube patches weekly.
+    "extractor_args": {"youtube": {"player_client": ["tv", "web_safari", "mweb", "android", "ios", "web"]}},
 }
 
 
