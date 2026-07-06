@@ -115,10 +115,8 @@
 <div id="bar">
   <span class="prompt">&gt;</span>
   <input id="url" type="text" placeholder="youtube link" spellcheck="false" autocomplete="off">
-  <button id="pick" title="upload an mp4 file" aria-label="upload an mp4 file">↑ upload</button>
   <button id="load">load</button>
 </div>
-<input id="file" type="file" accept="video/mp4,.mp4" hidden>
 <div id="loader"><div class="wave"></div><div class="msg"></div></div>
 <div id="status"></div>
 <div id="drop">drop an mp4 to play it in ascii</div>
@@ -484,11 +482,9 @@ video.addEventListener("playing", () => document.body.classList.add("playing"));
 video.addEventListener("error", () => { if (video.src) status.textContent = "this wouldn’t play — try a file or another link"; });
 
 const urlInput = document.getElementById("url");
-const fileInput = document.getElementById("file");
 document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
-document.getElementById("pick").addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
 urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadInput(e.target.value); });
+// Own-mp4 path is drag-and-drop only (see the drop handler below) — no upload button by design.
 
 // Drag a video file anywhere onto the page.
 let dragDepth = 0; // enter/leave fire per-element; count so the cue doesn't flicker over children
