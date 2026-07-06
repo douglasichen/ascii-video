@@ -29,17 +29,28 @@ MAX_CHARGE_USD = 0.10   # hard per-run spend cap: Apify aborts if a download wou
 CACHE_TTL = 6 * 24 * 3600  # seconds — under Apify's ~7-day KV retention, so a hit never points at a dead file
 
 
+_ID = r"[A-Za-z0-9_-]{11}"  # YouTube video ids are exactly 11 of these chars
+
+
 def _video_id(url):
+    """Extract an 11-char video id from a genuine YouTube URL, else "" (rejects non-YouTube hosts).
+
+    Gate for the Apify run (which costs money): require a real youtube host + a well-formed id, so a
+    caller can't feed an arbitrary URL through ?url=. Accepts watch, youtu.be, shorts/embed/live/v forms.
+    """
     p = urllib.parse.urlparse(url if "://" in url else "https://" + url)
+    host = p.netloc.lower().split(":")[0]
+    if host == "youtu.be":
+        m = re.fullmatch(_ID, p.path.strip("/").split("/")[0])
+        return m.group(0) if m else ""
+    if host != "youtube.com" and not host.endswith((".youtube.com", ".youtube-nocookie.com")) \
+            and host != "youtube-nocookie.com":
+        return ""
     v = urllib.parse.parse_qs(p.query).get("v")
-    if v:
+    if v and re.fullmatch(_ID, v[0]):
         return v[0]
-    m = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", p.path)
-    if m:
-        return m.group(1)
-    if "youtu.be" in p.netloc:
-        return p.path.strip("/").split("/")[0]
-    return ""
+    m = re.search(r"/(?:shorts|embed|live|v)/(" + _ID + r")", p.path)
+    return m.group(1) if m else ""
 
 
 def _cache_url(vid):
@@ -83,11 +94,14 @@ def cache_put(vid, stream_url):
 def start(url, token):
     """Cache hit -> {streamUrl, cached}. Miss -> kick off an actor run and return ids to poll."""
     vid = _video_id(url)
+    if not vid:
+        raise ValueError("not a valid YouTube video URL")
     cached = cache_get(vid)
     if cached:
         return {"streamUrl": cached, "cached": True}
+    canonical = f"https://www.youtube.com/watch?v={vid}"  # only a URL we built reaches the paid actor
     payload = json.dumps({
-        "startUrls": [url],
+        "startUrls": [canonical],
         "quality": "360",
         "storageType": "apify",
     }).encode()
@@ -135,11 +149,14 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
         try:
             if run_id:  # poll mode
                 return self._json(200, poll(run_id, (q.get("datasetId") or [""])[0], token, (q.get("videoId") or [""])[0]))
-            if url and "youtu" in url:  # start mode
+            if url:  # start mode — reject anything that isn't a genuine YouTube video URL
+                if not _video_id(url):
+                    return self._json(400, {"error": "not a valid YouTube video URL"})
                 return self._json(200, start(url, token))
             return self._json(400, {"error": "missing url or runId"})
         except Exception as e:
-            return self._json(502, {"error": str(e)[-300:]})
+            # token rides in the Apify request URL; never let it surface in an error echoed to the client
+            return self._json(502, {"error": str(e).replace(token, "***")[-300:]})
 
     def _json(self, status, obj):
         body = json.dumps(obj).encode()

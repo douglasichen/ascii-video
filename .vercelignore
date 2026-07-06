@@ -6,6 +6,7 @@ current.mp4
 *.mp4
 aws/
 docs/
+tests/
 *.md
 __pycache__/
 *.pyc
