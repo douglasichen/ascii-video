@@ -1,0 +1,76 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ascii embed</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:#08090a;overflow:hidden;font-family:var(--mono);}
+  /* the ascii — colour comes from the baked palette (buildPaletteCSS); flat colour set on #screen too */
+  #screen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;white-space:pre;line-height:1;color:#fff;}
+  #msg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#868b93;font-size:13px;letter-spacing:.02em;}
+  /* tap-to-play: only shown if audio autoplay is blocked by the host page */
+  #tap{position:fixed;inset:0;display:none;align-items:center;justify-content:center;cursor:pointer;
+       background:rgba(8,9,10,0.35);color:#e9eaed;font-size:14px;letter-spacing:.03em;z-index:2;}
+  #tap:not([hidden]){display:flex;}
+</style></head>
+<body>
+<pre id="screen"></pre>
+<div id="msg">loading…</div>
+<div id="tap" hidden>▶ play with sound</div>
+<audio id="audio" hidden></audio>
+<script src="/asciiv-codec.js"></script>
+<script>
+// Public S3 base for baked clips (bucket name is not secret). id = <timestamp>-<uuid>.asciiv
+const S3_BASE = "https://ascii-video-clips-992382605182.s3.us-east-1.amazonaws.com/";
+const screen = document.getElementById("screen");
+const msg = document.getElementById("msg");
+const tap = document.getElementById("tap");
+const audioEl = document.getElementById("audio");
+let frames = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0;
+
+function fit() { // scale the font so the fixed grid fills the iframe (monospace cell ~0.6 wide)
+  const f = Math.min(window.innerWidth / (cols * 0.6), window.innerHeight / rows);
+  screen.style.fontSize = Math.max(1, Math.floor(f)) + "px";
+}
+window.addEventListener("resize", fit);
+
+function draw(i) {
+  const g = frames[((i % frames.length) + frames.length) % frames.length];
+  if (shading) screen.innerHTML = ASCIIV.buildRows(g, cols, rows, true);
+  else screen.textContent = ASCIIV.buildRows(g, cols, rows, false);
+}
+function loop() { // frame index follows the audio clock when it's playing, else a wall-clock timer
+  const t = (audioEl.src && !audioEl.paused) ? audioEl.currentTime : performance.now() / 1000;
+  draw(Math.floor(t * fps));
+  raf = requestAnimationFrame(loop);
+}
+
+async function load() {
+  const id = new URLSearchParams(location.search).get("id");
+  if (!id) { msg.textContent = "no clip id"; return; }
+  let dec;
+  try {
+    const buf = new Uint8Array(await fetch(S3_BASE + id).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }));
+    dec = await ASCIIV.decodeAsciiv(buf);
+  } catch { msg.textContent = "clip unavailable"; return; }
+
+  const h = dec.header;
+  frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading;
+  document.head.appendChild(document.createElement("style")).textContent = ASCIIV.buildPaletteCSS(h.colour);
+  screen.style.color = h.colour;
+  msg.style.display = "none";
+  fit();
+  if (dec.audio) {
+    audioEl.src = URL.createObjectURL(new Blob([dec.audio], { type: h.audioMime || "audio/webm" }));
+    audioEl.loop = true;
+    // try to autoplay with sound; if the host blocks it, show a one-time tap overlay (ascii still animates)
+    audioEl.play().catch(() => {
+      tap.hidden = false;
+      tap.onclick = () => { tap.hidden = true; audioEl.play().catch(() => {}); };
+    });
+  }
+  loop();
+}
+load();
+</script>
+</body></html>

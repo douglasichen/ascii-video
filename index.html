@@ -30,11 +30,11 @@
   #bar input[type=text]{flex:1;min-width:0;font-family:var(--mono);font-size:13px;background:none;color:var(--text);border:none;outline:none;padding:0;height:100%;}
   #bar input[type=text]::placeholder{color:var(--muted);}
   #bar button{font-family:var(--mono);font-size:12px;letter-spacing:.02em;color:var(--text);background:rgba(255,255,255,0.06);
-       border:1px solid var(--border);border-radius:7px;padding:7px 15px;margin-left:8px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
+       border:1px solid var(--border);border-radius:7px;padding:7px 12px;margin-left:7px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,transform .05s;}
   #bar button:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
   #bar button:active{transform:translateY(1px);}
-  #bar button.icon{padding:7px 10px;color:var(--muted);}
-  #bar button.icon:hover{color:var(--text);}
+  #bar button#load{background:rgba(255,255,255,0.13);}
+  #bar button#load:hover{background:rgba(255,255,255,0.2);}
 
   /* drag-over cue: a hairline frame + hint while a file is over the window */
   #drop{position:fixed;inset:10px;z-index:5;border:1px dashed var(--border-strong);border-radius:16px;
@@ -42,12 +42,23 @@
         backdrop-filter:blur(2px);color:var(--text);font-size:14px;letter-spacing:.02em;pointer-events:none;}
   body.dragging #drop{display:flex;}
 
-  /* status message (loading / errors) under the bar */
-  #status{position:fixed;top:70px;left:22px;z-index:2;color:var(--muted);font-size:12px;max-width:min(440px,calc(100vw - 36px));}
+  /* error message — centered under the empty/loader stage so it reads with the middle, not a corner */
+  #status{position:fixed;top:calc(50% + 58px);left:50%;transform:translateX(-50%);z-index:2;color:var(--muted);
+       font-size:12.5px;text-align:center;max-width:min(460px,calc(100vw - 36px));}
 
-  /* control panel — a quiet instrument. .ctrl uses display:contents so every row's cells share one grid. */
-  #config{position:fixed;top:18px;right:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
-       gap:12px 12px;align-items:center;min-width:238px;padding:15px 16px;
+  /* loading — an on-theme ascii "scanner" that travels through the char ramp while Apify downloads.
+     Runs only during a youtube load (never during playback), so it costs the render loop nothing. */
+  #loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;display:none;}
+  #loader .wave{color:var(--muted);font-size:24px;line-height:1;white-space:pre;margin-bottom:20px;}
+  #loader .msg{color:var(--muted);font-size:13px;letter-spacing:.02em;}
+  body.loading #loader{display:block;}
+  body.loading #empty,body.playing #loader{display:none;}
+
+  /* control panel — a quiet instrument. Sits directly under the input bar in the same top-left column
+     (matched width) so the two read as one stack, not opposite corners. .ctrl uses display:contents so
+     every row's cells share one grid. */
+  #config{position:fixed;top:74px;left:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
+       gap:12px 12px;align-items:center;width:min(440px,calc(100vw - 36px));padding:15px 16px;
        background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);}
   .ctrl{display:contents;}
@@ -88,8 +99,29 @@
   #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
   body.playing #empty{display:none;}
 
+  /* generate-embed button (only while a video plays) + the snippet modal */
+  #embed{position:fixed;bottom:16px;right:16px;z-index:3;display:none;font-family:var(--mono);font-size:12px;
+       letter-spacing:.02em;color:var(--text);background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border);border-radius:9px;padding:9px 14px;cursor:pointer;box-shadow:var(--shadow);transition:background .15s,border-color .15s;}
+  #embed:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
+  #embed:disabled{opacity:.6;cursor:default;}
+  body.playing #embed{display:block;}
+  #embedwrap{position:fixed;inset:0;z-index:6;align-items:center;justify-content:center;
+       background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
+  #embedwrap:not([hidden]){display:flex;}
+  #embedcard{width:min(560px,calc(100vw - 40px));background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border-strong);border-radius:14px;box-shadow:var(--shadow);padding:18px;}
+  #embedcard .etitle{font-size:12px;color:var(--muted);letter-spacing:.03em;margin-bottom:10px;}
+  #embedcode{width:100%;height:92px;resize:none;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--text);
+       background:rgba(0,0,0,0.35);border:1px solid var(--border);border-radius:8px;padding:10px;outline:none;}
+  #embedcard .erow{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;}
+  #embedcard .erow button{font-family:var(--mono);font-size:12px;color:var(--text);background:rgba(255,255,255,0.08);
+       border:1px solid var(--border);border-radius:7px;padding:7px 14px;cursor:pointer;transition:background .15s;}
+  #embedcard .erow button:hover{background:rgba(255,255,255,0.15);}
+  #embedcard .erow #embedcopy{background:rgba(255,255,255,0.14);}
+
   @media (max-width:560px){
-    #config{left:18px;right:18px;top:auto;bottom:18px;}
+    #config{left:18px;right:18px;width:auto;}
     #bar{width:calc(100vw - 36px);}
     #fps{display:none !important;}
   }
@@ -99,21 +131,27 @@
 <pre id="screen"></pre>
 <div id="empty">
   <div class="ramp">.:-=+*#%@</div>
-  <div class="hint">paste a link, or drop a video file, to watch it in ascii</div>
+  <div class="hint">paste a link, or drop an mp4, to watch it in ascii</div>
 </div>
 <div id="bar">
   <span class="prompt">&gt;</span>
-  <input id="url" type="text" placeholder="youtube or video link" spellcheck="false" autocomplete="off">
-  <button id="pick" class="icon" title="upload a video file" aria-label="upload a video file">↑</button>
+  <input id="url" type="text" placeholder="youtube.com/watch?v=..." spellcheck="false" autocomplete="off">
   <button id="load">load</button>
 </div>
-<input id="file" type="file" accept="video/*" hidden>
+<div id="loader"><div class="wave"></div><div class="msg"></div></div>
 <div id="status"></div>
-<div id="drop">drop a video to play it in ascii</div>
+<div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
 <div id="config"></div>
+<button id="embed">◱ generate embed</button>
+<div id="embedwrap" hidden><div id="embedcard">
+  <div class="etitle">embed code — paste into any site</div>
+  <textarea id="embedcode" readonly spellcheck="false"></textarea>
+  <div class="erow"><button id="embedcopy">copy</button><button id="embedclose">close</button></div>
+</div></div>
 <canvas id="sample" style="display:none"></canvas>
 <video id="video" style="display:none" loop playsinline crossorigin="anonymous"></video>
+<script src="/asciiv-codec.js"></script>
 <script>
 const RAMP = " .:-=+*#%@";
 const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
@@ -131,8 +169,11 @@ let cols = 0, rows = 0;
 // (outside the link box). Off is the shipped default; it's a dev/perf tool, not part of the experience.
 let DEBUG = false;
 
+// Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames.
+let recording = false, recFrames = [], baking = false;
+
 const CONTROLS = {
-  detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
+  detail: { label: "resolution", min: 1, max: 8, step: 1, default: 8, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   brightness: { label: "brightness", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   invert: { label: "invert", type: "checkbox", default: false },
@@ -219,7 +260,15 @@ function computeGrid() {
 }
 
 function onMetadata() { computeGrid(); }
-window.addEventListener("resize", computeGrid);
+// Recompute the grid on a real window resize, but NOT on browser zoom (cmd +/-). Both fire a resize and
+// both shrink/grow innerWidth in CSS px — but zoom ALSO changes devicePixelRatio, a genuine resize does
+// not. So if dpr moved, it was a zoom: leave the resolution fixed and let the zoom just magnify the
+// (crisp, DOM-text) output, instead of resampling to a new grid.
+let lastDpr = window.devicePixelRatio;
+window.addEventListener("resize", () => {
+  if (window.devicePixelRatio !== lastDpr) { lastDpr = window.devicePixelRatio; return; }
+  computeGrid();
+});
 
 const RAMP_LAST = RAMP.length - 1;
 const RAMP_SCALE = RAMP.length / 255;
@@ -335,6 +384,7 @@ function paint() {
   const shade = state.shading; // per-cell tinted spans vs plain one-colour text
   const sat = state.saturation; // 0 = gray levels (signature look); >0 = quantized per-cell video colour
   const t = sat / 100;          // mix amount toward the source colour
+  const rec = recording ? new Uint8Array(cols * rows) : null; // capture char-indices while baking an embed
   for (let r = 0; r < rows; r++) {
     let runLv = -1; // current run key (gray level 0..7, OR colour-cube index 0..124); -1 = none open (per row)
     let base = r * cols * 4;
@@ -353,11 +403,14 @@ function paint() {
           runLv = key;
         }
       }
-      out += RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST];
+      const ci = gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST;
+      out += RAMP[ci];
+      if (rec) rec[r * cols + c] = ci;
     }
     if (shade) out += "</i>";
     if (r < rows - 1) out += "\n";
   }
+  if (rec) recFrames.push(rec); // one baked frame (matches exactly what's on screen this frame)
   const tDom = performance.now();
   // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
   if (shade) screen.innerHTML = out;
@@ -413,30 +466,109 @@ scheduleFrame();
 //  • a direct VIDEO URL -> used as-is (needs CORS on that host for getImageData; crossorigin is set).
 //  • a YOUTUBE link -> /api/resolve turns it into a stream URL. Best-effort: from a cloud host YouTube
 //    often bot-blocks the resolver, so file/direct-url are the reliable paths (see CLAUDE.md Deployment).
+const MAX_SECONDS = 300; // deny anything longer than 5 minutes (both youtube + dropped files)
 function playSrc(src) {
-  video.onloadedmetadata = onMetadata;
+  video.onloadedmetadata = () => {
+    if (isFinite(video.duration) && video.duration > MAX_SECONDS) {
+      video.pause(); video.removeAttribute("src"); video.load(); // stop + release the source
+      document.body.classList.remove("playing");
+      return showError("sorry — we only support videos under 5 minutes");
+    }
+    onMetadata();
+  };
   video.src = src;
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
 
+// Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
+function showError(msg) { stopLoader(); status.textContent = msg; }
+
 function loadFile(file) {
   if (!file) return;
-  if (!file.type.startsWith("video/")) { status.textContent = "that’s not a video file"; return; }
+  // We claim mp4-only. Reject anything else up front (covers both the upload button and drag-drop,
+  // since both route through here) rather than half-playing a format we don't promise to support.
+  const isMp4 = file.type === "video/mp4" || /\.mp4$/i.test(file.name);
+  if (!isMp4) return showError("sorry — we only accept mp4 files");
   status.textContent = "";
   playSrc(URL.createObjectURL(file));
 }
 
-async function loadYouTube(url) {
-  status.textContent = "loading…";
+// Resolve is a real ~60-100s download on Apify's side, so /api/resolve is non-blocking: it starts a
+// run and we poll it. While waiting, an on-theme ascii "scanner" (a bright pulse travelling through the
+// char ramp) animates in the centre, over a stage label that steps through the pipeline.
+const LOAD_STEPS = [
+  "contacting server…", "fetching from youtube…", "downloading video…",
+  "preparing stream…", "rendering ascii…",
+];
+const loaderEl = document.getElementById("loader");
+const waveEl = loaderEl.querySelector(".wave");
+const msgEl = loaderEl.querySelector(".msg");
+let waveTimer = 0, stepTimer = 0;
+
+function startLoader() {
+  status.textContent = ""; // clear any prior error
+  document.body.classList.add("loading");
+  const W = 34; let t = 0, step = 0;
+  msgEl.textContent = LOAD_STEPS[0];
+  waveTimer = setInterval(() => {           // bright pulse orbits the ramp; wrap-around keeps it seamless
+    const center = (t += 0.7) % W;
+    let s = "";
+    for (let x = 0; x < W; x++) {
+      let d = Math.abs(x - center); d = Math.min(d, W - d);
+      s += RAMP[Math.max(0, (RAMP.length - 1) - Math.round(d * 1.5))];
+    }
+    waveEl.textContent = s;
+  }, 70);
+  stepTimer = setInterval(() => {           // advance the stage label, then hold on the last
+    step = Math.min(step + 1, LOAD_STEPS.length - 1);
+    msgEl.textContent = LOAD_STEPS[step];
+  }, 4000);
+}
+function stopLoader() {
+  document.body.classList.remove("loading");
+  clearInterval(waveTimer); clearInterval(stepTimer);
+}
+
+// Strip playlist / index / timestamp cruft down to a clean watch URL so we resolve the single video the
+// user pasted, not the playlist it lives in. Handles watch?v=, youtu.be/, shorts/, embed/, live/.
+// Falls back to the raw string if no 11-char id is found (let the resolver try).
+function normalizeYouTube(raw) {
   try {
-    const res = await fetch("/api/resolve?url=" + encodeURIComponent(url));
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || "");
-    status.textContent = "";
-    playSrc(body.streamUrl);
-  } catch (err) {
-    status.textContent = "couldn’t load — " + (err.message || "try a direct video url or drop a file");
-  }
+    const u = new URL(raw.includes("://") ? raw : "https://" + raw);
+    let id = u.searchParams.get("v") || "";
+    if (!id && u.hostname.includes("youtu.be")) id = u.pathname.slice(1);
+    if (!id) { const m = u.pathname.match(/\/(?:shorts|embed|live|v)\/([^/?#]+)/); if (m) id = m[1]; }
+    id = id.split(/[/?#&]/)[0];
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? "https://www.youtube.com/watch?v=" + id : raw;
+  } catch { return raw; }
+}
+
+async function loadYouTube(url) {
+  url = normalizeYouTube(url);
+  startLoader();
+  const fail = (m) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
+
+  let job;
+  try {
+    job = await fetch("/api/resolve?url=" + encodeURIComponent(url)).then((r) => r.json());
+  } catch (err) { return fail(err.message); }
+  if (job.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(job.streamUrl); } // cache hit -> instant
+  if (!job.runId) return fail(job.error || "");
+
+  const deadline = Date.now() + 240000; // give up after 4 min
+  const poll = async () => {
+    if (Date.now() > deadline) return fail("this took too long — try again or upload an mp4");
+    let s;
+    try {
+      s = await fetch("/api/resolve?runId=" + encodeURIComponent(job.runId) +
+                      "&datasetId=" + encodeURIComponent(job.datasetId) +
+                      "&videoId=" + encodeURIComponent(job.videoId || "")).then((r) => r.json());
+    } catch { return setTimeout(poll, 3000); } // transient network blip — keep polling
+    if (s.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(s.streamUrl); }
+    if (["FAILED", "ABORTED", "TIMED-OUT"].includes(s.status)) return fail(s.error || s.status);
+    setTimeout(poll, 3000); // READY / RUNNING — keep waiting
+  };
+  poll();
 }
 
 function loadInput(text) {
@@ -453,11 +585,92 @@ video.addEventListener("playing", () => document.body.classList.add("playing"));
 video.addEventListener("error", () => { if (video.src) status.textContent = "this wouldn’t play — try a file or another link"; });
 
 const urlInput = document.getElementById("url");
-const fileInput = document.getElementById("file");
 document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
-document.getElementById("pick").addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
 urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadInput(e.target.value); });
+// Own-mp4 path is drag-and-drop only (see the drop handler below) — no upload button by design.
+
+// --- baked embed: record one loop -> .asciiv (shared codec) -> presigned S3 upload -> iframe snippet ---
+const embedBtn = document.getElementById("embed");
+const embedWrap = document.getElementById("embedwrap");
+const embedCode = document.getElementById("embedcode");
+const fmt = s => { s = Math.max(0, Math.round(s)); return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
+
+async function startBake() {
+  if (!video.videoWidth || baking) return;
+  baking = true; embedBtn.disabled = true; embedBtn.textContent = "baking…";
+  // Record exactly one period from wherever the video is now. It keeps looping, so audio + frames wrap
+  // seamlessly and phase doesn't matter (the embed loops too) — this avoids a seek/replay autoplay stall.
+  const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
+  let mr = null; const audioChunks = [];
+  try {
+    const stream = video.captureStream ? video.captureStream() : null;
+    const at = stream ? stream.getAudioTracks() : [];
+    if (window.MediaRecorder && at.length) {
+      mr = new MediaRecorder(new MediaStream(at));
+      mr.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+    }
+  } catch { /* captureStream/MediaRecorder unsupported -> silent embed */ }
+  recFrames = [];
+  try {
+    if (video.paused) await video.play();
+    if (mr) mr.start();
+    recording = true;
+    await new Promise(res => {
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        const el = (performance.now() - t0) / 1000;
+        status.textContent = `baking… ${fmt(el)} / ${fmt(dur)}`;
+        if (el >= dur) { clearInterval(iv); res(); }
+      }, 200);
+    });
+    recording = false;
+    let audioBlob = null;
+    if (mr) audioBlob = await new Promise(res => { mr.onstop = () => res(new Blob(audioChunks, { type: mr.mimeType || "audio/webm" })); mr.stop(); });
+    await bakeAndUpload(audioBlob, dur);
+  } catch (e) {
+    showError("couldn’t create embed — " + (e.message || "try again"));
+  } finally {
+    recording = false;
+    if (status.textContent.startsWith("baking")) status.textContent = "";
+    baking = false; embedBtn.disabled = false; embedBtn.textContent = "◱ generate embed";
+  }
+}
+
+async function bakeAndUpload(audioBlob, durSec) {
+  if (!recFrames.length) throw new Error("no frames captured");
+  status.textContent = "encoding…";
+  const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
+  const fps = Math.max(1, Math.round(recFrames.length / durSec));
+  const header = { fps, cols, rows, colour: state.color, shading: state.shading,
+                   durationMs: Math.round(durSec * 1000), audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
+  const bytes = await ASCIIV.encodeAsciiv(header, recFrames, audio);
+  recFrames = []; // free memory early
+  status.textContent = "uploading…";
+  const save = await fetch("/api/save", { method: "POST" }).then(r => r.json());
+  if (!save || !save.upload) throw new Error((save && save.error) || "save failed");
+  const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
+  Object.entries(save.upload.fields).forEach(([k, v]) => fd.append(k, v));
+  fd.append("file", new Blob([bytes], { type: "application/octet-stream" }));
+  const up = await fetch(save.upload.url, { method: "POST", body: fd });
+  if (!up.ok) throw new Error("upload failed (" + up.status + ")");
+  status.textContent = "";
+  showSnippet(save.key);
+}
+
+function showSnippet(key) {
+  const src = location.origin + "/embed.html?id=" + encodeURIComponent(key);
+  embedCode.value = `<iframe src="${src}" width="640" height="360" allow="autoplay" style="border:0"></iframe>`;
+  embedWrap.hidden = false;
+  embedCode.focus(); embedCode.select();
+}
+
+embedBtn.addEventListener("click", startBake);
+document.getElementById("embedcopy").addEventListener("click", () => {
+  embedCode.select();
+  if (navigator.clipboard) navigator.clipboard.writeText(embedCode.value);
+  const b = document.getElementById("embedcopy"); b.textContent = "copied"; setTimeout(() => (b.textContent = "copy"), 1200);
+});
+document.getElementById("embedclose").addEventListener("click", () => (embedWrap.hidden = true));
 
 // Drag a video file anywhere onto the page.
 let dragDepth = 0; // enter/leave fire per-element; count so the cue doesn't flicker over children
@@ -468,6 +681,16 @@ document.addEventListener("drop", e => {
   e.preventDefault();
   dragDepth = 0; document.body.classList.remove("dragging");
   if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+// Warn before closing once something's actually playing — leaving loses the ascii video. Only armed
+// while playing (no nag on the empty page). Browsers show their own generic text; the custom string is
+// ignored by modern browsers, but setting returnValue is what triggers the confirm prompt.
+window.addEventListener("beforeunload", e => {
+  if (document.body.classList.contains("playing")) {
+    e.preventDefault();
+    e.returnValue = "are you sure you wanna close? you’ll lose your ascii video";
+  }
 });
 
 document.addEventListener("keydown", e => {
