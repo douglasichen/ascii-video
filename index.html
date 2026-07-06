@@ -57,7 +57,7 @@
   /* control panel — a quiet instrument. Sits directly under the input bar in the same top-left column
      (matched width) so the two read as one stack, not opposite corners. .ctrl uses display:contents so
      every row's cells share one grid. */
-  #config{position:fixed;top:74px;left:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
+  #config{position:fixed;top:62px;left:18px;z-index:2;display:none;grid-template-columns:auto 1fr auto auto;
        gap:12px 12px;align-items:center;width:min(440px,calc(100vw - 36px));padding:15px 16px;
        background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);}
@@ -66,14 +66,14 @@
   .ctrl .val{font-size:11px;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;min-width:36px;}
   .ctrl .reset{font-family:var(--mono);font-size:13px;line-height:1;color:var(--faint);background:none;border:none;cursor:pointer;padding:2px 0;transition:color .15s,transform .2s;}
   .ctrl .reset:hover{color:var(--text);transform:rotate(-90deg);}
-  /* collapsible header — spans the whole grid; default collapsed (only this row shows, a compact pill) */
-  #config .chead{grid-column:1/-1;display:flex;align-items:center;gap:8px;width:100%;text-align:left;
-       font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
-       background:none;border:none;padding:0;cursor:pointer;transition:color .15s;}
-  #config .chead:hover{color:var(--text);}
-  #config .chead .chev{font-size:9px;color:var(--faint);transition:transform .18s;}
-  #config:not(.collapsed) .chead .chev{transform:rotate(90deg);}
-  #config.collapsed .ctrl{display:none;} /* shrink to just the header */
+  /* the chevron on the bar that expands the controls out of the bar itself */
+  #bar .cfgtoggle{padding:7px 9px;color:var(--muted);}
+  #bar .cfgtoggle:hover{color:var(--text);}
+  #bar .cfgtoggle .chev{display:inline-block;font-size:10px;transition:transform .2s;}
+  body.cfg-open #bar .cfgtoggle .chev{transform:rotate(180deg);}
+  /* when open, square the touching corners so the panel reads as one piece dropping out of the bar */
+  body.cfg-open #bar{border-bottom-left-radius:0;border-bottom-right-radius:0;}
+  body.cfg-open #config{display:grid;border-top-left-radius:0;border-top-right-radius:0;border-top:none;}
 
   /* range slider */
   input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:none;cursor:pointer;}
@@ -145,12 +145,13 @@
   <span class="prompt">&gt;</span>
   <input id="url" type="text" placeholder="youtube.com/watch?v=..." spellcheck="false" autocomplete="off">
   <button id="load">load</button>
+  <button class="cfgtoggle" id="cfgtoggle" type="button" aria-label="toggle controls" aria-expanded="false"><span class="chev">▾</span></button>
 </div>
 <div id="loader"><div class="wave"></div><div class="msg"></div></div>
 <div id="status"></div>
 <div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
-<div id="config" class="collapsed"><button class="chead" id="cfghead" type="button" aria-expanded="false"><span class="chev">▸</span>controls</button></div>
+<div id="config"></div>
 <button id="embed">◱ generate embed</button>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into any site</div>
@@ -244,11 +245,12 @@ configEl.addEventListener("click", e => {
   const key = e.target.dataset.key;
   if (key) setControl(key, CONTROLS[key].default);
 });
-// Collapse/expand the control panel (starts collapsed — just the "controls" header shows).
-const cfgHead = document.getElementById("cfghead");
-cfgHead.addEventListener("click", () => {
-  const collapsed = configEl.classList.toggle("collapsed");
-  cfgHead.setAttribute("aria-expanded", String(!collapsed));
+// Controls expand out of the bar itself. Collapsed by default -> only the url field shows; the chevron
+// on the bar drops the panel out flush beneath it.
+const cfgToggle = document.getElementById("cfgtoggle");
+cfgToggle.addEventListener("click", () => {
+  const open = document.body.classList.toggle("cfg-open");
+  cfgToggle.setAttribute("aria-expanded", String(open));
 });
 
 function computeGrid() {
