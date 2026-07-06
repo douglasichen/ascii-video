@@ -3,15 +3,20 @@ fetches a Range from it. Used to test whether YouTube IP-locks playback URLs to 
 Restricted to googlevideo.com hosts (not an open proxy). Delete after the test."""
 from http.server import BaseHTTPRequestHandler
 import json
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         url = self.rfile.read(n).decode().strip()
-        if "googlevideo.com" not in url:
+        # Validate the actual host (a substring check let e.g. http://169.254.169.254/?x=googlevideo.com
+        # through — an SSRF pivot). Only real *.googlevideo.com hosts over http(s) are allowed.
+        p = urllib.parse.urlparse(url)
+        host = p.netloc.lower().split(":")[0]
+        if p.scheme not in ("http", "https") or not (host == "googlevideo.com" or host.endswith(".googlevideo.com")):
             return self._json({"error": "only googlevideo.com urls"})
         try:
             req = urllib.request.Request(url, headers={"Range": "bytes=0-1"})

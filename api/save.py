@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import time
+import urllib.parse
 import uuid
 
 import boto3
@@ -45,8 +46,25 @@ def presign():
             "getUrl": f"https://{bucket}.s3.{region}.amazonaws.com/{key}"}
 
 
+def same_origin(headers):
+    """Lenient CSRF deterrent: if the request declares an Origin/Referer, its host must equal ours.
+
+    A cross-site page in someone's browser can't then silently mint uploads. Requests with no
+    Origin/Referer (curl, server-to-server) are allowed — the presigned POST's 25 MB size cap is the
+    real cost guard; this only turns away casual browser-driven abuse without breaking the app.
+    """
+    src = headers.get("Origin") or headers.get("Referer") or ""
+    if not src:
+        return True
+    src_host = urllib.parse.urlparse(src).netloc.split(":")[0].lower()
+    host = (headers.get("Host") or "").split(":")[0].lower()
+    return bool(src_host) and src_host == host
+
+
 class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class named `handler`
     def do_POST(self):
+        if not same_origin(self.headers):
+            return self._json(403, {"error": "cross-origin request refused"})
         try:
             payload = presign()
         except Exception as e:

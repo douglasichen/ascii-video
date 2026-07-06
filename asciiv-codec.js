@@ -20,6 +20,25 @@
 
   const ciToLevel = (ci) => Math.round((ci / RAMP_LAST) * (LEVELS - 1)); // char-index -> colour level
 
+  // Header caps — an .asciiv can be uploaded by anyone (presigned /api/save), so the embed player
+  // decodes untrusted input. These bound allocation so a tiny malicious file can't OOM the viewer,
+  // and constrain the fields that drive markup/CSS. Generous vs. any real clip; a violation fails closed.
+  const MAX_DIM = 4096, MAX_CELLS = 1_000_000, MAX_FRAMES = 100_000, MAX_TOTAL_CELLS = 100_000_000, MAX_FPS = 240;
+  const AUDIO_MIME_OK = /^audio\/(webm|mp4|ogg)\b/i;   // base type; tolerates a ";codecs=…" suffix
+  function validHeader(h) {
+    const isInt = (x, lo, hi) => Number.isInteger(x) && x >= lo && x <= hi;
+    if (!h || typeof h !== "object") return false;
+    if (typeof h.colour !== "string" || !/^#[0-9a-f]{6}$/i.test(h.colour)) return false;
+    if (!isInt(h.cols, 1, MAX_DIM) || !isInt(h.rows, 1, MAX_DIM)) return false;
+    if (h.cols * h.rows > MAX_CELLS) return false;
+    if (!isInt(h.frameCount, 1, MAX_FRAMES)) return false;
+    if (h.frameCount * h.cols * h.rows > MAX_TOTAL_CELLS) return false;
+    if (!isInt(h.fps, 1, MAX_FPS)) return false;
+    if (h.audioMime != null && h.audioMime !== "" &&
+        !(typeof h.audioMime === "string" && AUDIO_MIME_OK.test(h.audioMime))) return false;
+    return true;
+  }
+
   // #screen <style>: level i ramps black -> base colour. Mirrors the main app's buildPalette().
   function buildPaletteCSS(colour) {
     const r = parseInt(colour.slice(1, 3), 16), g = parseInt(colour.slice(3, 5), 16), b = parseInt(colour.slice(5, 7), 16);
@@ -38,7 +57,8 @@
     for (let r = 0; r < rows; r++) {
       let runLv = -1, base = r * cols;
       for (let c = 0; c < cols; c++) {
-        const ci = grid[base + c];
+        const raw = grid[base + c];
+        const ci = raw >= 0 && raw <= RAMP_LAST ? raw : 0; // clamp untrusted char-indices to the ramp
         if (shading) {
           const lv = ciToLevel(ci);
           if (lv !== runLv) { if (runLv !== -1) parts.push("</i>"); parts.push("<i class=", LEVEL_CLASS[lv], ">"); runLv = lv; }
@@ -116,6 +136,7 @@
     if (u8[0] !== 65 || u8[1] !== 83 || u8[2] !== 67 || u8[3] !== 86) throw new Error("not an .asciiv file");
     const headerLen = dv.getUint32(4, true);
     const header = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + headerLen)));
+    if (!validHeader(header)) throw new Error("invalid .asciiv header"); // fail closed on untrusted input
     const audioLen = dv.getUint32(8 + headerLen, true);
     const audioStart = 12 + headerLen;
     const audio = audioLen ? u8.subarray(audioStart, audioStart + audioLen) : null;
@@ -124,7 +145,7 @@
     return { header, frames, audio: audio ? audio.slice() : null };
   }
 
-  const api = { RAMP, LEVELS, encodeAsciiv, decodeAsciiv, buildRows, buildPaletteCSS };
+  const api = { RAMP, LEVELS, encodeAsciiv, decodeAsciiv, buildRows, buildPaletteCSS, validHeader };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ASCIIV = api;
 })(typeof self !== "undefined" ? self : this);
