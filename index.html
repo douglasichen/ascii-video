@@ -66,6 +66,14 @@
   .ctrl .val{font-size:11px;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;min-width:36px;}
   .ctrl .reset{font-family:var(--mono);font-size:13px;line-height:1;color:var(--faint);background:none;border:none;cursor:pointer;padding:2px 0;transition:color .15s,transform .2s;}
   .ctrl .reset:hover{color:var(--text);transform:rotate(-90deg);}
+  /* collapsible header — spans the whole grid; default collapsed (only this row shows, a compact pill) */
+  #config .chead{grid-column:1/-1;display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+       font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+       background:none;border:none;padding:0;cursor:pointer;transition:color .15s;}
+  #config .chead:hover{color:var(--text);}
+  #config .chead .chev{font-size:9px;color:var(--faint);transition:transform .18s;}
+  #config:not(.collapsed) .chead .chev{transform:rotate(90deg);}
+  #config.collapsed .ctrl{display:none;} /* shrink to just the header */
 
   /* range slider */
   input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:none;cursor:pointer;}
@@ -142,7 +150,7 @@
 <div id="status"></div>
 <div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
-<div id="config"></div>
+<div id="config" class="collapsed"><button class="chead" id="cfghead" type="button" aria-expanded="false"><span class="chev">▸</span>controls</button></div>
 <button id="embed">◱ generate embed</button>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into any site</div>
@@ -235,6 +243,12 @@ for (const key in CONTROLS) {
 configEl.addEventListener("click", e => {
   const key = e.target.dataset.key;
   if (key) setControl(key, CONTROLS[key].default);
+});
+// Collapse/expand the control panel (starts collapsed — just the "controls" header shows).
+const cfgHead = document.getElementById("cfghead");
+cfgHead.addEventListener("click", () => {
+  const collapsed = configEl.classList.toggle("collapsed");
+  cfgHead.setAttribute("aria-expanded", String(!collapsed));
 });
 
 function computeGrid() {
