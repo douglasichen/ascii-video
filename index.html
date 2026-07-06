@@ -120,6 +120,11 @@
        -webkit-backdrop-filter:blur(16px);border:1px solid var(--border-strong);border-radius:20px;padding:10px 18px;
        cursor:pointer;box-shadow:var(--shadow);}
   #unmute[hidden]{display:none;}
+  /* mobile: keep <video> rendered (iOS won't suspend it) but hidden behind an opaque cover; ascii above */
+  #mcover{display:none;}
+  body.is-mobile #video{display:block !important;position:fixed;inset:0;width:100%;height:100%;object-fit:cover;opacity:1;z-index:-2;}
+  body.is-mobile #mcover{display:block;position:fixed;inset:0;background:var(--bg);z-index:-1;}
+  #mdbg{position:fixed;left:8px;bottom:8px;z-index:9;font-family:var(--mono);font-size:10px;color:var(--muted);white-space:pre;display:none;}
   #embedwrap{position:fixed;inset:0;z-index:6;align-items:center;justify-content:center;
        background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
   #embedwrap:not([hidden]){display:flex;}
@@ -165,6 +170,8 @@
   <textarea id="embedcode" readonly spellcheck="false"></textarea>
   <div class="erow"><button id="embedcopy">copy</button><button id="embedclose">close</button></div>
 </div></div>
+<div id="mcover"></div>
+<div id="mdbg"></div>
 <canvas id="sample" style="display:none"></canvas>
 <video id="video" style="display:none" loop playsinline crossorigin="anonymous"></video>
 <script src="/asciiv-codec.js"></script>
@@ -173,13 +180,25 @@ const RAMP = " .:-=+*#%@";
 const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
 const video = document.getElementById("video");
 const screen = document.getElementById("screen");
-// Everything gated on IS_MOBILE below is mobile-only — desktop behaviour is untouched.
-const IS_MOBILE = matchMedia("(pointer: coarse)").matches;
+// Everything gated on IS_MOBILE below is mobile-only — desktop behaviour is untouched. Detect touch
+// devices broadly (some phones don't report pointer:coarse); ?mobile=1 forces it for testing.
+const IS_MOBILE = matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0
+  || new URLSearchParams(location.search).has("mobile");
 const unmuteBtn = document.getElementById("unmute");
-// iOS/mobile Safari SUSPENDS a display:none <video> after buffering a few seconds (that's the "plays a
-// few seconds then freezes"). Keep it in the render tree but invisible so it keeps decoding. Desktop
-// stays display:none (from the inline style), unchanged.
-if (IS_MOBILE) video.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;";
+// iOS SUSPENDS a display:none / opacity:0 <video> after a few seconds (the "plays then freezes", which
+// also kills its audio). The class makes it full-frame + actually rendered (opacity 1) but hidden behind
+// an opaque cover, which iOS treats as visible so it keeps decoding. Also opt into the "playback" audio
+// session so sound ignores the hardware silent switch (iOS 16.4+). Desktop: none of this runs.
+if (IS_MOBILE) {
+  document.body.classList.add("is-mobile");
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* older iOS */ }
+}
+// Live mobile debug readout (add ?debug=1) so device-only issues can be reported precisely.
+if (new URLSearchParams(location.search).has("debug")) {
+  const el = document.getElementById("mdbg"); el.style.display = "block";
+  setInterval(() => { el.textContent =
+    `mob=${IS_MOBILE} muted=${video.muted} paused=${video.paused} t=${(video.currentTime||0).toFixed(1)} rs=${video.readyState} playing=${document.body.classList.contains("playing")}`; }, 300);
+}
 const status = document.getElementById("status");
 const canvas = document.getElementById("sample");
 const bar = document.getElementById("bar");
