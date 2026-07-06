@@ -114,6 +114,12 @@
   #embed:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
   #embed:disabled{opacity:.6;cursor:default;}
   body.playing #embed{display:block;}
+  /* mobile-only "tap for sound" pill — shown via JS only on touch devices when playback starts muted */
+  #unmute{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:4;font-family:var(--mono);
+       font-size:12px;letter-spacing:.03em;color:var(--text);background:var(--surface);backdrop-filter:blur(16px);
+       -webkit-backdrop-filter:blur(16px);border:1px solid var(--border-strong);border-radius:20px;padding:10px 18px;
+       cursor:pointer;box-shadow:var(--shadow);}
+  #unmute[hidden]{display:none;}
   #embedwrap{position:fixed;inset:0;z-index:6;align-items:center;justify-content:center;
        background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
   #embedwrap:not([hidden]){display:flex;}
@@ -153,6 +159,7 @@
 <div id="fps"></div>
 <div id="config"></div>
 <button id="embed">◱ generate embed</button>
+<button id="unmute" hidden>♪ tap for sound</button>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into any site</div>
   <textarea id="embedcode" readonly spellcheck="false"></textarea>
@@ -166,6 +173,13 @@ const RAMP = " .:-=+*#%@";
 const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
 const video = document.getElementById("video");
 const screen = document.getElementById("screen");
+// Everything gated on IS_MOBILE below is mobile-only — desktop behaviour is untouched.
+const IS_MOBILE = matchMedia("(pointer: coarse)").matches;
+const unmuteBtn = document.getElementById("unmute");
+// iOS/mobile Safari SUSPENDS a display:none <video> after buffering a few seconds (that's the "plays a
+// few seconds then freezes"). Keep it in the render tree but invisible so it keeps decoding. Desktop
+// stays display:none (from the inline style), unchanged.
+if (IS_MOBILE) video.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1;";
 const status = document.getElementById("status");
 const canvas = document.getElementById("sample");
 const bar = document.getElementById("bar");
@@ -493,6 +507,10 @@ function playSrc(src) {
     onMetadata();
   };
   video.src = src;
+  // Mobile blocks autoplay WITH sound when play() runs after the async resolve (outside the tap gesture),
+  // so it either won't start or is force-muted. Start explicitly muted (guarantees playback) and offer a
+  // one-tap unmute. Desktop plays with sound as before.
+  if (IS_MOBILE) { video.muted = true; unmuteBtn.hidden = true; }
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
 
@@ -596,9 +614,21 @@ function loadInput(text) {
 }
 
 // Reveal the ASCII, hide the empty state, once frames actually start.
-video.addEventListener("playing", () => document.body.classList.add("playing"));
+video.addEventListener("playing", () => {
+  document.body.classList.add("playing");
+  if (IS_MOBILE && video.muted) unmuteBtn.hidden = false; // started muted to satisfy autoplay -> offer sound
+});
 // A source can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
 video.addEventListener("error", () => { if (video.src) status.textContent = "this wouldn’t play — try a file or another link"; });
+
+if (IS_MOBILE) {
+  // A fresh tap is a user gesture, so unmuting here is allowed by the mobile autoplay policy.
+  unmuteBtn.addEventListener("click", () => { video.muted = false; video.play().catch(() => {}); unmuteBtn.hidden = true; });
+  // Resume if the mobile browser suspends/stalls the stream. Guarded so it never fights the >5min reject
+  // (which pauses a too-long video) or an in-progress bake. There's no keyboard pause on mobile.
+  const resume = () => { if (video.src && isFinite(video.duration) && video.duration <= MAX_SECONDS && !video.ended && !baking) video.play().catch(() => {}); };
+  ["pause", "waiting", "stalled"].forEach(ev => video.addEventListener(ev, resume));
+}
 
 const urlInput = document.getElementById("url");
 document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
