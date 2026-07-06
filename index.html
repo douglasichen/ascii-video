@@ -143,6 +143,12 @@ const CONTROLS = {
   // base display colour. Shade mode ramps each level black -> this colour (tinted depth); turbo mode
   // uses it flat. White (#ffffff) = the classic gray look. type:"color" -> renders an <input type=color>.
   color: { label: "colour", type: "color", default: "#ffffff" },
+  // per-cell video colour, 0 = grayscale (the signature look, default), 100 = full source colour. Only
+  // active with shading on. The trick that makes it affordable: the mixed colour is quantized to a small
+  // fixed cube (CQ^3 = 125 colours), so adjacent cells still land in the same bucket and runs still merge
+  // (~1.3x the gray span count, measured — vs ~4.3x for the old full-RGB path that was removed). At >0 it
+  // overrides the base-colour tint (you're showing the video's own colour, not a monochrome ramp).
+  saturation: { label: "saturation", min: 0, max: 100, step: 1, default: 0, unit: "%" },
 };
 const state = {};
 for (const key in CONTROLS) state[key] = CONTROLS[key].default;
@@ -248,6 +254,28 @@ function buildPalette(color) {
   screen.style.color = color; // turbo mode's flat text colour
 }
 buildPalette(state.color);
+
+// Per-cell colour cube. Each channel is quantized to CQ levels, so the whole palette is CQ^3 fixed
+// colours. That small palette is the ENTIRE reason per-cell colour is affordable here: adjacent cells
+// keep landing in the same bucket, so runs still merge (~1.3x the gray span count at CQ=5, measured;
+// the old full-8-bit-RGB path was ~4.3x and tanked FPS — see bench/color-bench.js). Like the gray
+// levels, each palette colour is ONE static CSS class (`.k123{color:#rrggbb}`), so a cell emits
+// `<i class=k123>` (short markup, browser resolves ~125 shared rules, not tens of thousands of inline
+// styles). The cube is FIXED (frame- and base-colour-independent), so this <style> is built exactly once.
+const CQ = 5;                              // levels per channel -> 125-colour palette
+const CQ_STEP = 255 / (CQ - 1);
+const CQ_MAP = new Uint8Array(256);        // channel value 0..255 -> cube level 0..CQ-1
+for (let v = 0; v < 256; v++) CQ_MAP[v] = Math.round(v / CQ_STEP);
+(function buildColorCube() {
+  let css = "";
+  for (let i = 0; i < CQ * CQ * CQ; i++) {
+    const b = i % CQ, g = (i / CQ | 0) % CQ, r = (i / (CQ * CQ)) | 0; // key = (r*CQ+g)*CQ+b (matches paint)
+    const hex = [r, g, b].map(x => Math.round(x * CQ_STEP).toString(16).padStart(2, "0")).join("");
+    css += `#screen .k${i}{color:#${hex}}`;
+  }
+  document.head.appendChild(document.createElement("style")).textContent = css;
+})();
+
 // contrast curve, rebuilt per frame (256 entries is nothing next to the pixel loop). Uint8Clamped rounds+clamps for free.
 const CONTRAST_LUT = new Uint8ClampedArray(256);
 
@@ -305,17 +333,24 @@ function paint() {
   // 7-10ms; this holds ~2ms), on byte-identical output. See bench/render-bench.js.
   let out = "";
   const shade = state.shading; // per-cell tinted spans vs plain one-colour text
+  const sat = state.saturation; // 0 = gray levels (signature look); >0 = quantized per-cell video colour
+  const t = sat / 100;          // mix amount toward the source colour
   for (let r = 0; r < rows; r++) {
-    let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
+    let runLv = -1; // current run key (gray level 0..7, OR colour-cube index 0..124); -1 = none open (per row)
     let base = r * cols * 4;
     for (let c = 0; c < cols; c++, base += 4) {
-      const gray = clut[data[base]] * 0.299 + clut[data[base + 1]] * 0.587 + clut[data[base + 2]] * 0.114;
+      const R = clut[data[base]], G = clut[data[base + 1]], B = clut[data[base + 2]];
+      const gray = R * 0.299 + G * 0.587 + B * 0.114;
       if (shade) {
-        const lv = QUANT_LEVEL[gray | 0];
-        if (lv !== runLv) {
+        // sat=0: quantize luminance to a gray level (unchanged signature path). sat>0: mix each channel
+        // toward the source colour by t, then snap to the CQ^3 colour cube -> a small, run-mergeable palette.
+        let key;
+        if (sat) key = (CQ_MAP[(gray + (R - gray) * t) | 0] * CQ + CQ_MAP[(gray + (G - gray) * t) | 0]) * CQ + CQ_MAP[(gray + (B - gray) * t) | 0];
+        else key = QUANT_LEVEL[gray | 0];
+        if (key !== runLv) {
           if (runLv !== -1) out += "</i>";
-          out += "<i class=" + LEVEL_CLASS[lv] + ">";
-          runLv = lv;
+          out += sat ? "<i class=k" + key + ">" : "<i class=" + LEVEL_CLASS[key] + ">";
+          runLv = key;
         }
       }
       out += RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST];

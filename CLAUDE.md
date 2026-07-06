@@ -10,7 +10,7 @@ they share logic:
 
 - **`index.html` + `api/resolve.py`** (deploys to Vercel) — the live player.
   Paste a YouTube URL, it plays in the browser as animated ASCII text with
-  tunable detail/contrast/brightness/invert/shading/colour, looping, with audio.
+  tunable detail/contrast/brightness/invert/shading/colour/saturation, looping, with audio.
   This is the active thing being developed. Runs locally via `server.py` too.
 - **`ascii_video.py`** — an older, independent CLI tool that batch-converts
   every frame of a local mp4 into a single giant self-contained HTML file
@@ -69,15 +69,35 @@ luminance → quantized level → ASCII character → tinted DOM text**.
   whole frame contains at most 8 distinct colours → neighbouring cells
   constantly match → runs merge into long spans → few spans. (Was 16; dropped
   to 8 because it roughly halves the span count with banding still hidden by
-  the char ramp — span count is the render's bottleneck.) Per-cell RGB *from
-  the video* stays removed because independent channels give 16³ = 4096
-  possible colours, which shatters the merge (5–10× more spans, measured) and
-  tanks FPS. But a single user-chosen **base colour** is free: `buildPalette()`
-  ramps the 8 level classes from black → that colour (white = the classic gray
-  ramp), so it's still ≤ 8 colours/frame and merging is untouched. It rebuilds
-  that one `<style>` on change and sets `#screen.style.color` for turbo's flat
-  text. The old per-cell-from-video path (a `gray` 0–100% slider mixing
-  luminance back toward source RGB) is in git history. Other hot-loop specifics: the
+  the char ramp — span count is the render's bottleneck.) Raw per-cell RGB *from
+  the video* stays removed because independent 8-bit channels give ~16M possible
+  colours, which shatters the merge (~4.3× more spans, measured in
+  `bench/color-bench.js`) and tanks FPS. But a single user-chosen **base colour**
+  is free: `buildPalette()` ramps the 8 level classes from black → that colour
+  (white = the classic gray ramp), so it's still ≤ 8 colours/frame and merging is
+  untouched. It rebuilds that one `<style>` on change and sets `#screen.style.color`
+  for turbo's flat text.
+- **`saturation` slider (per-cell video colour, default 0 = off).** The old
+  per-cell-from-video path was removed for the span-explosion above, but it comes
+  back *affordably* by quantizing hard: each channel is snapped to `CQ`=5 levels,
+  so the whole palette is a fixed `CQ³`=125-colour cube. Adjacent cells keep
+  landing in the same bucket → runs still merge → only **~1.34× the gray span
+  count** (measured node-side AND confirmed in a real browser: the `innerHTML`+
+  layout DOM phase was 1.33× gray, matching the proxy). Each cube colour is one
+  static CSS class (`.k123{color:#rrggbb}`, built once in a `<style>`), so a cell
+  emits `<i class=k123>` — same short class-based markup as the gray levels, not
+  inline styles. `saturation`=0 uses the untouched 8-level gray path (byte-identical
+  to before, asserted in `bench/color-check.js`); >0 mixes each channel toward the
+  source colour by `sat/100` then snaps to the cube, and overrides the base-colour
+  tint (you're showing the video's own colour). Only active with shading on.
+- **Build assembly: one cons-string, not an array + join.** `paint()` grows the
+  whole frame's markup with `out += …` rather than pushing per-cell parts into an
+  array and `join()`-ing. V8 builds it as a rope and flattens once at assignment,
+  which skips both the per-cell `push` and the join — ~68% less build time and
+  ~4× lower worst-frame (the old array path GC-spiked to 7–10 ms; this holds ~2 ms)
+  on byte-identical output. Measured by `bench/render-bench.js` (a headless node
+  harness that replays the exact build loop on synthetic frames and asserts the
+  HTML is unchanged). Other hot-loop specifics: the
   offscreen canvas uses `willReadFrequently:true` (CPU-backed, avoids
   GPU-readback stalls on `getImageData`); a per-frame 256-entry contrast LUT
   replaces per-pixel `adjustContrast` calls; colors are compared as the
