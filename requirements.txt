@@ -1,1 +1,2 @@
-yt-dlp
+# api/resolve.py uses only the Python stdlib (urllib) — the download is done by the Apify actor.
+# (yt-dlp was removed when resolve switched from local extraction to the Apify downloader.)

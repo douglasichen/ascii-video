@@ -1,72 +1,49 @@
 """Vercel Python function: GET /api/resolve?url=<youtube-url> -> {"streamUrl", "title"}.
 
-Resolves a YouTube URL to a direct progressive (audio+video) mp4 CDN URL via yt-dlp's
-extract_info(download=False) — no download, no re-hosting. The browser points its <video>
-element straight at that URL. See docs/superpowers/specs/2026-07-05-vercel-migration-design.md.
+Resolves via the Apify `epctex/youtube-video-downloader` actor. Apify downloads the video on *their*
+infra (not YouTube-bot-blocked the way Vercel's datacenter IP is), stores the mp4 in Apify's
+key-value store, and hands back a public, CORS-enabled (`Access-Control-Allow-Origin: *`) URL the
+browser can both play and sample via canvas getImageData. No proxy, and Apify auto-expires the file
+(7-day retention) so there's nothing to store or clean up.
 
-Known limitation (documented in the spec): these googlevideo URLs can be IP/session-locked and
-may not send CORS headers, which can break cross-origin playback + the canvas getImageData the
-renderer needs. That's the accepted trade-off of resolve-vs-download on serverless.
+Why not yt-dlp: from Vercel's IP YouTube bot-blocks the resolver, and even past that the googlevideo
+URL is IP-locked to the resolver + sends no CORS headers. The old yt-dlp/cookies path is in git
+history. Cost: ~$0.00015/sec of 360p (~3c for a 3-min clip). Needs APIFY_TOKEN env var.
 """
 from http.server import BaseHTTPRequestHandler
 import json
 import os
 import urllib.parse
+import urllib.request
 
-import yt_dlp
-
-YDL_OPTS = {
-    "quiet": True,
-    "no_warnings": True,
-    "skip_download": True,
-    # Progressive mp4 = one URL carrying both audio and video, so a plain <video src> can play it
-    # (adaptive/DASH would need MSE). Mirrors the old CLI's -f mp4/best[ext=mp4]/best.
-    "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best",
-    # From a datacenter IP (Vercel) the default web client gets "confirm you're not a bot". The mobile
-    # clients dodge that more often and don't need a PO token; try them first. Not a guaranteed fix —
-    # YouTube's bot-detection on cloud IPs is the fundamental limit of resolving without cookies.
-    # Order matters: from a datacenter IP the android/ios clients increasingly return "No video
-    # formats found" (format URLs gated behind a PO token). tv (tv_embedded) and web_safari currently
-    # survive that more often, so lead with them. This is a moving target — YouTube patches weekly.
-    "extractor_args": {"youtube": {"player_client": ["tv", "web_safari", "mweb", "android", "ios", "web"]}},
-}
-
-
-def _cookiefile():
-    """Materialize the YT_COOKIES env var (a Netscape cookies.txt's contents) to /tmp so yt-dlp
-    can use it, or return None when unset. Cookies let resolve survive YouTube's datacenter
-    bot-block far more often — but it's a logged-in account session sitting in an env var: it
-    expires, and that account can get flagged. Kept in env (not the repo) and optional on purpose;
-    unset -> today's best-effort mobile-client path. ponytail: env var beats a committed secret."""
-    raw = os.environ.get("YT_COOKIES")
-    if not raw:
-        return None
-    path = "/tmp/yt_cookies.txt"  # /tmp is the only writable dir on Vercel; persists across warm calls
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            f.write(raw)
-    return path
+ACTOR = "epctex~youtube-video-downloader"
+RUN_URL = f"https://api.apify.com/v2/acts/{ACTOR}/run-sync-get-dataset-items"
 
 
 def resolve(url):
-    """Return {streamUrl, title} for a YouTube URL, or raise on failure."""
-    opts = dict(YDL_OPTS)
-    cookiefile = _cookiefile()
-    if cookiefile:
-        opts["cookiefile"] = cookiefile
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-    stream = info.get("url")  # extract_info already applied the format selector
-    if not stream:  # fall back: scan formats for a progressive mp4 (highest first)
-        for f in reversed(info.get("formats", [])):
-            if (f.get("ext") == "mp4" and f.get("url")
-                    and f.get("acodec") not in (None, "none")
-                    and f.get("vcodec") not in (None, "none")):
-                stream = f["url"]
-                break
-    if not stream:
-        raise ValueError("no playable progressive mp4 format found for this video")
-    return {"streamUrl": stream, "title": info.get("title", "")}
+    """Return {streamUrl, title} for a YouTube URL via the Apify downloader, or raise on failure."""
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        raise ValueError("APIFY_TOKEN not set")
+    payload = json.dumps({
+        "startUrls": [url],
+        "quality": "360",        # cheapest tier; plenty once downsampled to ASCII cells
+        "storageType": "apify",  # Apify-hosted -> CORS-enabled + auto-expiring, no proxy/cleanup
+    }).encode()
+    # run-sync blocks until the download finishes, then returns the dataset items.
+    req = urllib.request.Request(
+        f"{RUN_URL}?token={urllib.parse.quote(token)}&timeout=110",
+        data=payload, headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        items = json.load(r)
+    for it in items:
+        if it.get("demo"):  # actor returns [{"demo":true}...] when its paid plan isn't active
+            raise ValueError("Apify actor not activated (demo output) — enable paid usage on it")
+        out = it.get("output") or {}
+        if it.get("status") == "succeeded" and out.get("url"):
+            return {"streamUrl": out["url"], "title": it.get("videoId", "")}
+    raise ValueError((items and items[0].get("status")) or "download failed")
 
 
 class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class named `handler`
@@ -77,7 +54,7 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
             return self._json(400, {"error": "missing or invalid YouTube url"})
         try:
             payload = resolve(url)
-        except Exception as e:  # yt-dlp raises many types; surface a trimmed message
+        except Exception as e:  # surface a trimmed message
             return self._json(502, {"error": str(e)[-300:]})
         return self._json(200, payload)
 
@@ -91,9 +68,9 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
         self.wfile.write(body)
 
 
-if __name__ == "__main__":  # smoke test: `python3 api/resolve.py [url]`
+if __name__ == "__main__":  # smoke test: APIFY_TOKEN=... python3 api/resolve.py [url]
     import sys
     test = sys.argv[1] if len(sys.argv) > 1 else "https://www.youtube.com/watch?v=jNQXAC9IVRw"
     out = resolve(test)
     assert out["streamUrl"].startswith("http"), out
-    print("OK:", out["title"], "\n ", out["streamUrl"][:90], "...")
+    print("OK:", out["title"], "\n ", out["streamUrl"])
