@@ -104,6 +104,25 @@ Single stack:
         width="640" height="360" frameborder="0" allow="autoplay"></iframe>
 ```
 
+## Rate limiting & abuse protection
+
+`/api/save` is a public write door — nothing rate-limits it by default (S3 accepts unlimited PUTs and
+bills you; Vercel doesn't throttle endpoints automatically). Layers, cheapest/most-effective first:
+
+- **Vercel-native rate limit on `/api/save`** (platform feature, no external state): a **per-IP** limit
+  (~10 requests/min — a human bakes occasionally) plus a **global ceiling (~100 req/s)** as the coarse
+  backstop the user asked for. Preferred because it needs no Redis and no custom limiter. If the plan
+  doesn't expose it, fall back to a lightweight Upstash Redis limiter — but don't build that unless the
+  native path is unavailable.
+- **Presigned PUT content-length cap** (in `/api/save`, free): sign the URL with a
+  `content-length-range` condition (e.g. ≤ 25 MB) so no single upload can be huge — bounds per-write cost
+  regardless of request rate. This is the guard that actually caps spend.
+- **S3 lifecycle expiry** (in CDK, free): auto-delete objects after N days (e.g. 30) so even a burst that
+  slips through doesn't accumulate storage cost forever.
+
+Rate limiting throttles *frequency*; the size cap + lifecycle bound *cost*. Both are worth having; the
+size cap and lifecycle are essentially free and always apply even if the rate limiter is misconfigured.
+
 ## Error handling
 
 - Bake with no video playing → button hidden.

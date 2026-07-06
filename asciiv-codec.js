@@ -1,0 +1,130 @@
+/* Shared .asciiv codec — the single source of truth for the baked-embed format, loaded by BOTH the
+ * main player (encode) and the embed player (decode) so they can never drift. Also runnable in Node
+ * (globals CompressionStream / Response exist in Node 18+) so the format round-trips in a headless test.
+ *
+ * Container (little-endian):
+ *   "ASCV" | u32 headerLen | header JSON | u32 audioLen | audio bytes | gzip(frame stream)
+ * header: { v, fps, cols, rows, frameCount, colour, shading, durationMs, audioMime }
+ * frame stream (pre-gzip): frame0 = cols*rows char-indices (0..9); frameK = u32 changed count, then
+ *   count*(u32 cellIndex, u8 charIndex) applied over the running grid. Low motion -> tiny deltas.
+ *
+ * Per cell we store ONLY the ramp char-index; the colour level is derived from it (both monotonic in
+ * luminance), and the palette is rebuilt from `colour`. One value/cell keeps the file small.
+ */
+(function (root) {
+  const RAMP = " .:-=+*#%@";        // 10 chars — MUST match the main renderer
+  const RAMP_LAST = RAMP.length - 1;
+  const LEVELS = 8;                  // colour levels — MUST match the main renderer
+  const LEVEL_CLASS = [];
+  for (let i = 0; i < LEVELS; i++) LEVEL_CLASS[i] = String.fromCharCode(97 + i); // "a".."h"
+
+  const ciToLevel = (ci) => Math.round((ci / RAMP_LAST) * (LEVELS - 1)); // char-index -> colour level
+
+  // #screen <style>: level i ramps black -> base colour. Mirrors the main app's buildPalette().
+  function buildPaletteCSS(colour) {
+    const r = parseInt(colour.slice(1, 3), 16), g = parseInt(colour.slice(3, 5), 16), b = parseInt(colour.slice(5, 7), 16);
+    let css = "#screen i{font-style:normal}";
+    for (let i = 0; i < LEVELS; i++) {
+      const f = i / (LEVELS - 1);
+      const hex = [r, g, b].map((x) => Math.round(x * f).toString(16).padStart(2, "0")).join("");
+      css += `#screen .${LEVEL_CLASS[i]}{color:#${hex}}`;
+    }
+    return css;
+  }
+
+  // grid (Uint8Array cols*rows of char-indices) -> the same markup the main renderer emits.
+  function buildRows(grid, cols, rows, shading) {
+    const parts = [];
+    for (let r = 0; r < rows; r++) {
+      let runLv = -1, base = r * cols;
+      for (let c = 0; c < cols; c++) {
+        const ci = grid[base + c];
+        if (shading) {
+          const lv = ciToLevel(ci);
+          if (lv !== runLv) { if (runLv !== -1) parts.push("</i>"); parts.push("<i class=", LEVEL_CLASS[lv], ">"); runLv = lv; }
+        }
+        parts.push(RAMP[ci]);
+      }
+      if (shading) parts.push("</i>");
+      if (r < rows - 1) parts.push("\n");
+    }
+    return parts.join("");
+  }
+
+  async function gzip(u8) {
+    const s = new Response(u8).body.pipeThrough(new CompressionStream("gzip"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  async function gunzip(u8) {
+    const s = new Response(u8).body.pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+
+  function concat(chunks) {
+    let n = 0; for (const c of chunks) n += c.length;
+    const out = new Uint8Array(n); let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out;
+  }
+
+  function encodeFrames(frames, N) {
+    const chunks = [frames[0].slice(0, N)]; // keyframe
+    for (let k = 1; k < frames.length; k++) {
+      const prev = frames[k - 1], cur = frames[k], changed = [];
+      for (let i = 0; i < N; i++) if (cur[i] !== prev[i]) changed.push(i);
+      const buf = new Uint8Array(4 + changed.length * 5);
+      const dv = new DataView(buf.buffer);
+      dv.setUint32(0, changed.length, true);
+      let o = 4;
+      for (const i of changed) { dv.setUint32(o, i, true); dv.setUint8(o + 4, cur[i]); o += 5; }
+      chunks.push(buf);
+    }
+    return concat(chunks);
+  }
+
+  function decodeFrames(stream, N, frameCount) {
+    const grid = stream.slice(0, N); // running grid (mutated + snapshotted per frame)
+    const frames = [grid.slice()];
+    const dv = new DataView(stream.buffer, stream.byteOffset, stream.byteLength);
+    let o = N;
+    for (let k = 1; k < frameCount; k++) {
+      const count = dv.getUint32(o, true); o += 4;
+      for (let j = 0; j < count; j++) { grid[dv.getUint32(o, true)] = dv.getUint8(o + 4); o += 5; }
+      frames.push(grid.slice());
+    }
+    return frames;
+  }
+
+  async function encodeAsciiv(header, frames, audio) {
+    const N = header.cols * header.rows;
+    const full = { v: 1, frameCount: frames.length, ...header };
+    const headerBytes = new TextEncoder().encode(JSON.stringify(full));
+    const audioBytes = audio || new Uint8Array(0);
+    const framesGz = await gzip(encodeFrames(frames, N));
+    const prefix = new Uint8Array(4 + 4 + headerBytes.length + 4 + audioBytes.length);
+    const dv = new DataView(prefix.buffer);
+    prefix.set([65, 83, 67, 86], 0); // "ASCV"
+    dv.setUint32(4, headerBytes.length, true);
+    prefix.set(headerBytes, 8);
+    dv.setUint32(8 + headerBytes.length, audioBytes.length, true);
+    prefix.set(audioBytes, 12 + headerBytes.length);
+    return concat([prefix, framesGz]);
+  }
+
+  async function decodeAsciiv(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (u8[0] !== 65 || u8[1] !== 83 || u8[2] !== 67 || u8[3] !== 86) throw new Error("not an .asciiv file");
+    const headerLen = dv.getUint32(4, true);
+    const header = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + headerLen)));
+    const audioLen = dv.getUint32(8 + headerLen, true);
+    const audioStart = 12 + headerLen;
+    const audio = audioLen ? u8.subarray(audioStart, audioStart + audioLen) : null;
+    const framesGz = u8.subarray(audioStart + audioLen);
+    const frames = decodeFrames(await gunzip(framesGz), header.cols * header.rows, header.frameCount);
+    return { header, frames, audio: audio ? audio.slice() : null };
+  }
+
+  const api = { RAMP, LEVELS, encodeAsciiv, decodeAsciiv, buildRows, buildPaletteCSS };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.ASCIIV = api;
+})(typeof self !== "undefined" ? self : this);

@@ -1,42 +1,95 @@
-"""Vercel Python function: two-step, non-blocking YouTube resolve via the Apify downloader actor.
+"""Vercel Python function: two-step, non-blocking YouTube resolve via the Apify downloader actor,
+with an S3-backed cache of the resolved mp4 URL keyed by video id.
 
-  GET /api/resolve?url=<youtube-url>             -> {"runId","datasetId","status"}   (starts a run)
-  GET /api/resolve?runId=<id>&datasetId=<id>     -> {"status", "streamUrl"?}          (polls it)
+  GET /api/resolve?url=<youtube-url>                        -> cache HIT: {"streamUrl","cached":true}
+                                                              cache MISS: {"runId","datasetId","videoId"}
+  GET /api/resolve?runId=<id>&datasetId=<id>&videoId=<id>   -> {"status", "streamUrl"?}  (poll; writes cache)
 
-Why two steps: the Apify actor cold-start + download is 60-100s and highly variable. Blocking the
-serverless function that whole time (the old `run-sync` path) sat right on Vercel's timeout cliff, so
-longer videos (esp. shorts) intermittently timed out. Starting the run and letting the browser poll
-makes every request <1s and removes the cliff.
+Cache: Apify already hosts the mp4 (its key-value store, ~7-day retention). We just cache that URL string
+in our own S3 bucket at cache/<videoId>.json = {streamUrl, expiresAt}. Repeat plays of the same video
+skip the Apify run entirely (instant, no cost). TTL is 6 days, under Apify's retention, so an entry never
+outlives the file it points at; once it does expire it's simply a cache miss and we re-run. Reads are a
+plain public GET (objects are public-read); writes use boto3 (best-effort, never fail the resolve).
 
-Apify downloads on its own infra (not YouTube-bot-blocked like Vercel's IP), stores the mp4 in its
-key-value store, and serves it CORS-enabled (`Access-Control-Allow-Origin: *`) so the browser plays
-and canvas-samples it directly. Auto-expires (7-day retention) -> nothing to store or clean up.
-Needs APIFY_TOKEN. Cost ~$0.00015/sec of 360p. The old yt-dlp path is in git history.
+Why Apify at all: from Vercel's IP YouTube bot-blocks yt-dlp, and even past that the googlevideo URL is
+IP-locked + CORS-less. Apify downloads on its infra and serves a public CORS-enabled mp4. Needs
+APIFY_TOKEN; cache needs ASCIIV_BUCKET/ASCIIV_REGION/ASCIIV_KEY_ID/ASCIIV_SECRET.
 """
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
+import time
 import urllib.parse
 import urllib.request
 
 ACTOR = "epctex~youtube-video-downloader"
 API = "https://api.apify.com/v2"
-MAX_CHARGE_USD = 0.10  # hard per-run spend cap: Apify aborts the run if the download would exceed this
-                       # (~11 min of 360p). Server-side backstop on cost, independent of the client's
-                       # 5-min duration gate.
+MAX_CHARGE_USD = 0.10   # hard per-run spend cap: Apify aborts if a download would exceed this (~11 min 360p)
+CACHE_TTL = 6 * 24 * 3600  # seconds — under Apify's ~7-day KV retention, so a hit never points at a dead file
 
 
-def _get(url):
-    with urllib.request.urlopen(url, timeout=25) as r:
-        return json.load(r)
+def _video_id(url):
+    p = urllib.parse.urlparse(url if "://" in url else "https://" + url)
+    v = urllib.parse.parse_qs(p.query).get("v")
+    if v:
+        return v[0]
+    m = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", p.path)
+    if m:
+        return m.group(1)
+    if "youtu.be" in p.netloc:
+        return p.path.strip("/").split("/")[0]
+    return ""
+
+
+def _cache_url(vid):
+    return f"https://{os.environ['ASCIIV_BUCKET']}.s3.{os.environ.get('ASCIIV_REGION', 'us-east-1')}.amazonaws.com/cache/{vid}.json"
+
+
+def cache_get(vid):
+    """Return the cached stream URL for a video id, or None (miss / expired / not configured)."""
+    if not vid or not os.environ.get("ASCIIV_BUCKET"):
+        return None
+    try:
+        with urllib.request.urlopen(_cache_url(vid), timeout=8) as r:
+            d = json.load(r)
+        if d.get("streamUrl") and d.get("expiresAt", 0) > time.time():
+            return d["streamUrl"]
+    except Exception:
+        pass  # missing object -> 403/404 -> miss
+    return None
+
+
+def cache_put(vid, stream_url):
+    """Best-effort write of the resolved URL to S3. Never raises — a cache write must not fail a resolve."""
+    if not vid or not os.environ.get("ASCIIV_BUCKET"):
+        return
+    try:
+        import boto3
+        from botocore.config import Config
+        s3 = boto3.client(
+            "s3", region_name=os.environ.get("ASCIIV_REGION", "us-east-1"),
+            aws_access_key_id=os.environ["ASCIIV_KEY_ID"],
+            aws_secret_access_key=os.environ["ASCIIV_SECRET"],
+            config=Config(signature_version="s3v4"),
+        )
+        body = json.dumps({"streamUrl": stream_url, "expiresAt": int(time.time()) + CACHE_TTL}).encode()
+        s3.put_object(Bucket=os.environ["ASCIIV_BUCKET"], Key=f"cache/{vid}.json",
+                      Body=body, ContentType="application/json")
+    except Exception:
+        pass
 
 
 def start(url, token):
-    """Kick off an actor run for `url`; returns immediately with ids to poll."""
+    """Cache hit -> {streamUrl, cached}. Miss -> kick off an actor run and return ids to poll."""
+    vid = _video_id(url)
+    cached = cache_get(vid)
+    if cached:
+        return {"streamUrl": cached, "cached": True}
     payload = json.dumps({
         "startUrls": [url],
-        "quality": "360",        # cheapest tier; plenty once downsampled to ASCII cells
-        "storageType": "apify",  # Apify-hosted -> CORS-enabled + auto-expiring, no proxy/cleanup
+        "quality": "360",
+        "storageType": "apify",
     }).encode()
     req = urllib.request.Request(
         f"{API}/acts/{ACTOR}/runs?token={urllib.parse.quote(token)}&maxTotalChargeUsd={MAX_CHARGE_USD}",
@@ -44,11 +97,16 @@ def start(url, token):
     )
     with urllib.request.urlopen(req, timeout=25) as r:
         d = json.load(r)["data"]
-    return {"runId": d["id"], "datasetId": d["defaultDatasetId"], "status": d["status"]}
+    return {"runId": d["id"], "datasetId": d["defaultDatasetId"], "status": d["status"], "videoId": vid}
 
 
-def poll(run_id, dataset_id, token):
-    """Return {status} while running, or {status:'SUCCEEDED', streamUrl} once the mp4 is ready."""
+def _get(url):
+    with urllib.request.urlopen(url, timeout=25) as r:
+        return json.load(r)
+
+
+def poll(run_id, dataset_id, token, video_id=""):
+    """{status} while running, or {status:'SUCCEEDED', streamUrl} once ready (and caches the URL)."""
     tok = urllib.parse.quote(token)
     status = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id)}?token={tok}")["data"]["status"]
     if status == "ABORTED":  # almost always the maxTotalChargeUsd cap tripping on a too-long video
@@ -57,10 +115,11 @@ def poll(run_id, dataset_id, token):
         return {"status": status}  # READY / RUNNING / FAILED / TIMED-OUT
     items = _get(f"{API}/datasets/{urllib.parse.quote(dataset_id)}/items?token={tok}")
     for it in items:
-        if it.get("demo"):  # actor's paid plan not active
+        if it.get("demo"):
             return {"status": "FAILED", "error": "Apify actor not activated (demo output)"}
         out = it.get("output") or {}
-        if out.get("url"):
+        if it.get("status") == "succeeded" and out.get("url"):
+            cache_put(video_id, out["url"])
             return {"status": "SUCCEEDED", "streamUrl": out["url"]}
     return {"status": "FAILED", "error": "run succeeded but no video url in output"}
 
@@ -75,7 +134,7 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
         url = (q.get("url") or [""])[0]
         try:
             if run_id:  # poll mode
-                return self._json(200, poll(run_id, (q.get("datasetId") or [""])[0], token))
+                return self._json(200, poll(run_id, (q.get("datasetId") or [""])[0], token, (q.get("videoId") or [""])[0]))
             if url and "youtu" in url:  # start mode
                 return self._json(200, start(url, token))
             return self._json(400, {"error": "missing url or runId"})
@@ -93,14 +152,19 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
 
 
 if __name__ == "__main__":  # smoke test: APIFY_TOKEN=... python3 api/resolve.py [url]
-    import sys, time
+    import sys
     tok = os.environ["APIFY_TOKEN"]
     test = sys.argv[1] if len(sys.argv) > 1 else "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    print("videoId:", _video_id(test))
     job = start(test, tok)
     print("started:", job)
-    for _ in range(60):
-        time.sleep(3)
-        s = poll(job["runId"], job["datasetId"], tok)
-        print(" ", s.get("status"), s.get("streamUrl", ""))
-        if s.get("streamUrl") or s["status"] in ("FAILED", "ABORTED", "TIMED-OUT"):
-            break
+    if job.get("streamUrl"):
+        print("cache hit:", job["streamUrl"])
+    else:
+        import time as _t
+        for _ in range(60):
+            _t.sleep(3)
+            s = poll(job["runId"], job["datasetId"], tok, job.get("videoId", ""))
+            print(" ", s.get("status"), s.get("streamUrl", ""))
+            if s.get("streamUrl") or s["status"] in ("FAILED", "ABORTED", "TIMED-OUT"):
+                break

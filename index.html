@@ -99,6 +99,27 @@
   #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
   body.playing #empty{display:none;}
 
+  /* generate-embed button (only while a video plays) + the snippet modal */
+  #embed{position:fixed;bottom:16px;right:16px;z-index:3;display:none;font-family:var(--mono);font-size:12px;
+       letter-spacing:.02em;color:var(--text);background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border);border-radius:9px;padding:9px 14px;cursor:pointer;box-shadow:var(--shadow);transition:background .15s,border-color .15s;}
+  #embed:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
+  #embed:disabled{opacity:.6;cursor:default;}
+  body.playing #embed{display:block;}
+  #embedwrap{position:fixed;inset:0;z-index:6;align-items:center;justify-content:center;
+       background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
+  #embedwrap:not([hidden]){display:flex;}
+  #embedcard{width:min(560px,calc(100vw - 40px));background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border-strong);border-radius:14px;box-shadow:var(--shadow);padding:18px;}
+  #embedcard .etitle{font-size:12px;color:var(--muted);letter-spacing:.03em;margin-bottom:10px;}
+  #embedcode{width:100%;height:92px;resize:none;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--text);
+       background:rgba(0,0,0,0.35);border:1px solid var(--border);border-radius:8px;padding:10px;outline:none;}
+  #embedcard .erow{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;}
+  #embedcard .erow button{font-family:var(--mono);font-size:12px;color:var(--text);background:rgba(255,255,255,0.08);
+       border:1px solid var(--border);border-radius:7px;padding:7px 14px;cursor:pointer;transition:background .15s;}
+  #embedcard .erow button:hover{background:rgba(255,255,255,0.15);}
+  #embedcard .erow #embedcopy{background:rgba(255,255,255,0.14);}
+
   @media (max-width:560px){
     #config{left:18px;right:18px;width:auto;}
     #bar{width:calc(100vw - 36px);}
@@ -122,8 +143,15 @@
 <div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
 <div id="config"></div>
+<button id="embed">◱ generate embed</button>
+<div id="embedwrap" hidden><div id="embedcard">
+  <div class="etitle">embed code — paste into any site</div>
+  <textarea id="embedcode" readonly spellcheck="false"></textarea>
+  <div class="erow"><button id="embedcopy">copy</button><button id="embedclose">close</button></div>
+</div></div>
 <canvas id="sample" style="display:none"></canvas>
 <video id="video" style="display:none" loop playsinline crossorigin="anonymous"></video>
+<script src="/asciiv-codec.js"></script>
 <script>
 const RAMP = " .:-=+*#%@";
 const CHAR_ASPECT = 0.55; // monospace cell width:height compensation
@@ -140,6 +168,9 @@ let cols = 0, rows = 0;
 // are suppressed, and the per-frame forced-layout measurement is skipped. Toggle live by pressing "d"
 // (outside the link box). Off is the shipped default; it's a dev/perf tool, not part of the experience.
 let DEBUG = false;
+
+// Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames.
+let recording = false, recFrames = [], baking = false;
 
 const CONTROLS = {
   detail: { label: "resolution", min: 1, max: 8, step: 1, default: 8, unit: "" },
@@ -323,6 +354,7 @@ function paint() {
   const parts = PARTS;
   parts.length = 0; // reuse the backing array; keeps capacity, allocates nothing
   const shade = state.shading; // per-cell tinted spans vs plain one-colour text
+  const rec = recording ? new Uint8Array(cols * rows) : null; // capture char-indices while baking an embed
   for (let r = 0; r < rows; r++) {
     let runLv = -1; // current run's gray level; -1 = none open yet (reset per row, spans never cross \n)
     let base = r * cols * 4;
@@ -336,11 +368,14 @@ function paint() {
           runLv = lv;
         }
       }
-      parts.push(RAMP[gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST]);
+      const ci = gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST;
+      parts.push(RAMP[ci]);
+      if (rec) rec[r * cols + c] = ci;
     }
     if (shade) parts.push("</i>");
     if (r < rows - 1) parts.push("\n");
   }
+  if (rec) recFrames.push(rec); // one baked frame (matches exactly what's on screen this frame)
   const tDom = performance.now();
   // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
   if (shade) screen.innerHTML = parts.join("");
@@ -481,8 +516,9 @@ async function loadYouTube(url) {
   let job;
   try {
     job = await fetch("/api/resolve?url=" + encodeURIComponent(url)).then((r) => r.json());
-    if (!job.runId) throw new Error(job.error || "");
   } catch (err) { return fail(err.message); }
+  if (job.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(job.streamUrl); } // cache hit -> instant
+  if (!job.runId) return fail(job.error || "");
 
   const deadline = Date.now() + 240000; // give up after 4 min
   const poll = async () => {
@@ -490,7 +526,8 @@ async function loadYouTube(url) {
     let s;
     try {
       s = await fetch("/api/resolve?runId=" + encodeURIComponent(job.runId) +
-                      "&datasetId=" + encodeURIComponent(job.datasetId)).then((r) => r.json());
+                      "&datasetId=" + encodeURIComponent(job.datasetId) +
+                      "&videoId=" + encodeURIComponent(job.videoId || "")).then((r) => r.json());
     } catch { return setTimeout(poll, 3000); } // transient network blip — keep polling
     if (s.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(s.streamUrl); }
     if (["FAILED", "ABORTED", "TIMED-OUT"].includes(s.status)) return fail(s.error || s.status);
@@ -516,6 +553,89 @@ const urlInput = document.getElementById("url");
 document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
 urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadInput(e.target.value); });
 // Own-mp4 path is drag-and-drop only (see the drop handler below) — no upload button by design.
+
+// --- baked embed: record one loop -> .asciiv (shared codec) -> presigned S3 upload -> iframe snippet ---
+const embedBtn = document.getElementById("embed");
+const embedWrap = document.getElementById("embedwrap");
+const embedCode = document.getElementById("embedcode");
+const fmt = s => { s = Math.max(0, Math.round(s)); return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
+
+async function startBake() {
+  if (!video.videoWidth || baking) return;
+  baking = true; embedBtn.disabled = true; embedBtn.textContent = "baking…";
+  // Record exactly one period from wherever the video is now. It keeps looping, so audio + frames wrap
+  // seamlessly and phase doesn't matter (the embed loops too) — this avoids a seek/replay autoplay stall.
+  const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
+  let mr = null; const audioChunks = [];
+  try {
+    const stream = video.captureStream ? video.captureStream() : null;
+    const at = stream ? stream.getAudioTracks() : [];
+    if (window.MediaRecorder && at.length) {
+      mr = new MediaRecorder(new MediaStream(at));
+      mr.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+    }
+  } catch { /* captureStream/MediaRecorder unsupported -> silent embed */ }
+  recFrames = [];
+  try {
+    if (video.paused) await video.play();
+    if (mr) mr.start();
+    recording = true;
+    await new Promise(res => {
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        const el = (performance.now() - t0) / 1000;
+        status.textContent = `baking… ${fmt(el)} / ${fmt(dur)}`;
+        if (el >= dur) { clearInterval(iv); res(); }
+      }, 200);
+    });
+    recording = false;
+    let audioBlob = null;
+    if (mr) audioBlob = await new Promise(res => { mr.onstop = () => res(new Blob(audioChunks, { type: mr.mimeType || "audio/webm" })); mr.stop(); });
+    await bakeAndUpload(audioBlob, dur);
+  } catch (e) {
+    showError("couldn’t create embed — " + (e.message || "try again"));
+  } finally {
+    recording = false;
+    if (status.textContent.startsWith("baking")) status.textContent = "";
+    baking = false; embedBtn.disabled = false; embedBtn.textContent = "◱ generate embed";
+  }
+}
+
+async function bakeAndUpload(audioBlob, durSec) {
+  if (!recFrames.length) throw new Error("no frames captured");
+  status.textContent = "encoding…";
+  const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
+  const fps = Math.max(1, Math.round(recFrames.length / durSec));
+  const header = { fps, cols, rows, colour: state.color, shading: state.shading,
+                   durationMs: Math.round(durSec * 1000), audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
+  const bytes = await ASCIIV.encodeAsciiv(header, recFrames, audio);
+  recFrames = []; // free memory early
+  status.textContent = "uploading…";
+  const save = await fetch("/api/save", { method: "POST" }).then(r => r.json());
+  if (!save || !save.upload) throw new Error((save && save.error) || "save failed");
+  const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
+  Object.entries(save.upload.fields).forEach(([k, v]) => fd.append(k, v));
+  fd.append("file", new Blob([bytes], { type: "application/octet-stream" }));
+  const up = await fetch(save.upload.url, { method: "POST", body: fd });
+  if (!up.ok) throw new Error("upload failed (" + up.status + ")");
+  status.textContent = "";
+  showSnippet(save.key);
+}
+
+function showSnippet(key) {
+  const src = location.origin + "/embed.html?id=" + encodeURIComponent(key);
+  embedCode.value = `<iframe src="${src}" width="640" height="360" allow="autoplay" style="border:0"></iframe>`;
+  embedWrap.hidden = false;
+  embedCode.focus(); embedCode.select();
+}
+
+embedBtn.addEventListener("click", startBake);
+document.getElementById("embedcopy").addEventListener("click", () => {
+  embedCode.select();
+  if (navigator.clipboard) navigator.clipboard.writeText(embedCode.value);
+  const b = document.getElementById("embedcopy"); b.textContent = "copied"; setTimeout(() => (b.textContent = "copy"), 1200);
+});
+document.getElementById("embedclose").addEventListener("click", () => (embedWrap.hidden = true));
 
 // Drag a video file anywhere onto the page.
 let dragDepth = 0; // enter/leave fire per-element; count so the cue doesn't flicker over children

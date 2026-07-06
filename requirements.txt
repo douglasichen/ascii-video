@@ -1,2 +1,3 @@
 # api/resolve.py uses only the Python stdlib (urllib) — the download is done by the Apify actor.
-# (yt-dlp was removed when resolve switched from local extraction to the Apify downloader.)
+# api/save.py uses boto3 to mint a presigned S3 POST for uploading baked .asciiv embeds.
+boto3
