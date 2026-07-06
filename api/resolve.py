@@ -10,6 +10,7 @@ renderer needs. That's the accepted trade-off of resolve-vs-download on serverle
 """
 from http.server import BaseHTTPRequestHandler
 import json
+import os
 import urllib.parse
 
 import yt_dlp
@@ -28,9 +29,29 @@ YDL_OPTS = {
 }
 
 
+def _cookiefile():
+    """Materialize the YT_COOKIES env var (a Netscape cookies.txt's contents) to /tmp so yt-dlp
+    can use it, or return None when unset. Cookies let resolve survive YouTube's datacenter
+    bot-block far more often — but it's a logged-in account session sitting in an env var: it
+    expires, and that account can get flagged. Kept in env (not the repo) and optional on purpose;
+    unset -> today's best-effort mobile-client path. ponytail: env var beats a committed secret."""
+    raw = os.environ.get("YT_COOKIES")
+    if not raw:
+        return None
+    path = "/tmp/yt_cookies.txt"  # /tmp is the only writable dir on Vercel; persists across warm calls
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(raw)
+    return path
+
+
 def resolve(url):
     """Return {streamUrl, title} for a YouTube URL, or raise on failure."""
-    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+    opts = dict(YDL_OPTS)
+    cookiefile = _cookiefile()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     stream = info.get("url")  # extract_info already applied the format selector
     if not stream:  # fall back: scan formats for a progressive mp4 (highest first)
