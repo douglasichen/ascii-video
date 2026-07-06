@@ -2,35 +2,98 @@
 <html><head><meta charset="utf-8"><title>ascii embed</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root{--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;}
+  :root{
+    --bg:#08090a;
+    --text:#e9eaed;
+    --muted:#868b93;
+    --faint:#43474e;
+    --surface:rgba(20,21,24,0.72);
+    --border:rgba(255,255,255,0.10);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
   *{box-sizing:border-box;}
-  html,body{margin:0;height:100%;background:#08090a;overflow:hidden;font-family:var(--mono);}
-  /* the ascii — colour comes from the baked palette (buildPaletteCSS); flat colour set on #screen too */
+  html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;font-family:var(--mono);color:var(--text);-webkit-font-smoothing:antialiased;}
+
+  /* the ascii — the hero. Colour comes from the baked palette (buildPaletteCSS); flat colour set on #screen too. */
   #screen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;white-space:pre;line-height:1;color:#fff;}
-  #msg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#868b93;font-size:13px;letter-spacing:.02em;}
-  /* tap-to-play: only shown if audio autoplay is blocked by the host page */
-  #tap{position:fixed;inset:0;display:none;align-items:center;justify-content:center;cursor:pointer;
-       background:rgba(8,9,10,0.35);color:#e9eaed;font-size:14px;letter-spacing:.03em;z-index:2;}
+
+  /* faint vignette so the ascii sits in a frame and edges don't feel raw. Never competes — pure black falloff. */
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:1;
+    background:radial-gradient(ellipse 120% 120% at 50% 50%,transparent 58%,rgba(0,0,0,0.55) 100%);}
+
+  /* unobtrusive corner mark — recessive, monochrome, gets out of the way of the art */
+  #mark{position:fixed;right:9px;bottom:7px;z-index:1;pointer-events:none;
+    font-size:10px;letter-spacing:.22em;color:var(--faint);opacity:.6;user-select:none;}
+
+  /* loading — an animated ascii "scanner" wave in the same mono/monochrome language as the main app.
+     A row of ramp glyphs with a bright band sweeping across via a clipped gradient (no JS, no assets). */
+  #load{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;text-align:center;}
+  #load .wave{font-size:24px;letter-spacing:.36em;padding-left:.36em;font-weight:400;
+    background:linear-gradient(100deg,var(--faint) 20%,var(--text) 50%,var(--faint) 80%);
+    background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+    animation:sweep 1.5s linear infinite;}
+  #load .cap{margin-top:16px;font-size:11px;letter-spacing:.28em;color:var(--muted);text-transform:uppercase;}
+  @keyframes sweep{0%{background-position:140% 0;}100%{background-position:-40% 0;}}
+
+  /* error — an intentional, on-brand card, not raw text */
+  #err{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;display:none;
+    flex-direction:column;align-items:center;gap:10px;padding:22px 26px;max-width:78vw;
+    background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    border:1px solid var(--border);border-radius:13px;box-shadow:0 12px 40px rgba(0,0,0,0.55);text-align:center;}
+  #err .glyph{font-size:22px;color:var(--faint);letter-spacing:.3em;padding-left:.3em;}
+  #err .title{font-size:13px;letter-spacing:.02em;color:var(--text);}
+  #err .sub{font-size:11px;letter-spacing:.02em;color:var(--muted);}
+
+  /* tap-to-enable-sound — a single glassy play glyph over the (already animating) ascii. Shown only if
+     unmuted autoplay is blocked. Not a full-screen wall; the art stays visible and moving behind it. */
+  #tap{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:4;display:none;
+    flex-direction:column;align-items:center;gap:11px;cursor:pointer;}
   #tap:not([hidden]){display:flex;}
+  #tap .disc{width:76px;height:76px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:var(--surface);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--border);box-shadow:0 12px 40px rgba(0,0,0,0.55);
+    font-size:26px;color:var(--text);padding-left:5px;transition:transform .12s,border-color .15s,background .15s;}
+  #tap:hover .disc{transform:scale(1.06);border-color:rgba(255,255,255,0.22);background:rgba(30,31,34,0.8);}
+  #tap .lbl{font-size:11px;letter-spacing:.22em;color:var(--muted);text-transform:uppercase;}
+
+  @media (prefers-reduced-motion:reduce){#load .wave{animation:none;background-position:50% 0;}}
 </style></head>
 <body>
 <pre id="screen"></pre>
-<div id="msg">loading…</div>
-<div id="tap" hidden>▶ play with sound</div>
+<div id="vignette"></div>
+<div id="mark">ascii</div>
+<div id="load"><div class="wave">.:-=+*#%@</div><div class="cap">loading</div></div>
+<div id="err"><div class="glyph">·:·</div><div class="title">clip unavailable</div><div class="sub">this embed could not be loaded</div></div>
+<div id="tap" hidden><div class="disc">&#9654;</div><div class="lbl">tap for sound</div></div>
 <audio id="audio" hidden></audio>
 <script src="/asciiv-codec.js"></script>
 <script>
 // Public S3 base for baked clips (bucket name is not secret). id = <timestamp>-<uuid>.asciiv
 const S3_BASE = "https://ascii-video-clips-992382605182.s3.us-east-1.amazonaws.com/";
 const screen = document.getElementById("screen");
-const msg = document.getElementById("msg");
+const loadEl = document.getElementById("load");
+const errEl = document.getElementById("err");
 const tap = document.getElementById("tap");
 const audioEl = document.getElementById("audio");
 let frames = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0;
 
-function fit() { // scale the font so the fixed grid fills the iframe (monospace cell ~0.6 wide)
-  const f = Math.min(window.innerWidth / (cols * 0.6), window.innerHeight / rows);
-  screen.style.fontSize = Math.max(1, Math.floor(f)) + "px";
+// Real monospace glyph advance (as a fraction of font-size), measured once from the actual rendered font
+// so the grid fills to the constraining edge exactly rather than assuming a magic 0.6 that varies by font.
+let charAspect = 0.6;
+function measureCharAspect() {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-family:var(--mono);font-size:100px;line-height:1;";
+  probe.textContent = "0".repeat(100);
+  document.body.appendChild(probe);
+  const w = probe.getBoundingClientRect().width;
+  document.body.removeChild(probe);
+  if (w > 0) charAspect = w / 100 / 100; // width per char / font-size
+}
+
+function fit() { // scale the font so the fixed grid fills the frame, keeping aspect (letterboxed, never stretched)
+  if (!cols || !rows) return;
+  const f = Math.min(window.innerWidth / (cols * charAspect), window.innerHeight / rows);
+  screen.style.fontSize = Math.max(1, f) + "px"; // fractional -> fills to the edge, no rounding margin
 }
 window.addEventListener("resize", fit);
 
@@ -39,37 +102,74 @@ function draw(i) {
   if (shading) screen.innerHTML = ASCIIV.buildRows(g, cols, rows, true);
   else screen.textContent = ASCIIV.buildRows(g, cols, rows, false);
 }
-function loop() { // frame index follows the audio clock when it's playing, else a wall-clock timer
-  const t = (audioEl.src && !audioEl.paused) ? audioEl.currentTime : performance.now() / 1000;
+// Frame index follows the audio clock ONLY when audio is genuinely advancing (playing AND currentTime moving);
+// otherwise a wall-clock timer drives it. This keeps the ascii animating no matter what audio does — blocked,
+// buffering, muted, missing or stalled — instead of freezing on frame 0 (which happens if you trust !paused
+// alone: play() flips paused=false synchronously, long before any audio data has actually started).
+let clockBase = performance.now();
+function loop() {
+  // audio clock when it's actually playing past 0 (A/V sync); wall clock otherwise (blocked/buffering/muted/none)
+  const at = audioEl.currentTime;
+  const t = (audioEl.src && !audioEl.paused && at > 0) ? at : (performance.now() - clockBase) / 1000;
   draw(Math.floor(t * fps));
   raf = requestAnimationFrame(loop);
 }
 
+// One-tap / first-interaction sound enable. Only wired up when unmuted autoplay was refused.
+function enableSound() {
+  audioEl.muted = false;
+  audioEl.play().catch(() => {});
+  tap.hidden = true;
+  document.removeEventListener("pointerdown", enableSound);
+  document.removeEventListener("keydown", enableSound);
+}
+function offerSound() {
+  tap.hidden = false;
+  tap.onclick = enableSound;
+  // also unmute on ANY first interaction anywhere in the frame, so the common case feels like "it just plays"
+  document.addEventListener("pointerdown", enableSound, { once: true });
+  document.addEventListener("keydown", enableSound, { once: true });
+}
+
+function startAudio() {
+  audioEl.loop = true;
+  // 1) try unmuted straight away. 2) if the host blocks it, fall back to MUTED autoplay so the clip is at
+  // least alive and A/V-synced, and surface a tasteful tap to bring sound in (also unmutes on any click/key).
+  audioEl.muted = false;
+  audioEl.play().catch(() => {
+    audioEl.muted = true;
+    audioEl.play().catch(() => {}); // muted autoplay is almost always allowed; ignore if even that's refused
+    offerSound();
+  });
+}
+
 async function load() {
   const id = new URLSearchParams(location.search).get("id");
-  if (!id) { msg.textContent = "no clip id"; return; }
+  if (!id) return showError();
   let dec;
   try {
     const buf = new Uint8Array(await fetch(S3_BASE + id).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }));
     dec = await ASCIIV.decodeAsciiv(buf);
-  } catch { msg.textContent = "clip unavailable"; return; }
+  } catch { return showError(); }
 
   const h = dec.header;
   frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading;
   document.head.appendChild(document.createElement("style")).textContent = ASCIIV.buildPaletteCSS(h.colour);
   screen.style.color = h.colour;
-  msg.style.display = "none";
+  loadEl.style.display = "none";
+  measureCharAspect();
   fit();
   if (dec.audio) {
     audioEl.src = URL.createObjectURL(new Blob([dec.audio], { type: h.audioMime || "audio/webm" }));
-    audioEl.loop = true;
-    // try to autoplay with sound; if the host blocks it, show a one-time tap overlay (ascii still animates)
-    audioEl.play().catch(() => {
-      tap.hidden = false;
-      tap.onclick = () => { tap.hidden = true; audioEl.play().catch(() => {}); };
-    });
+    startAudio();
   }
+  clockBase = performance.now();
   loop();
+}
+
+function showError() {
+  loadEl.style.display = "none";
+  errEl.style.display = "flex";
 }
 load();
 </script>
