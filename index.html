@@ -391,15 +391,29 @@ function loadFile(file) {
   playSrc(URL.createObjectURL(file));
 }
 
+// Resolve is a real download on Apify's side (~15-25s), so step through the pipeline stages instead
+// of a static "loading…". Advances every few seconds and holds on the last stage until the fetch lands.
+const LOAD_STEPS = [
+  "contacting server…", "fetching from youtube…", "downloading video…",
+  "preparing stream…", "rendering ascii…",
+];
+
 async function loadYouTube(url) {
-  status.textContent = "loading…";
+  let i = 0;
+  status.textContent = LOAD_STEPS[0];
+  const tick = setInterval(() => {
+    i = Math.min(i + 1, LOAD_STEPS.length - 1); // advance, then hold on the final stage
+    status.textContent = LOAD_STEPS[i];
+  }, 3000);
   try {
     const res = await fetch("/api/resolve?url=" + encodeURIComponent(url));
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || "");
+    clearInterval(tick);
     status.textContent = "";
     playSrc(body.streamUrl);
   } catch (err) {
+    clearInterval(tick);
     const m = err.message || "";
     // The bot-block / cookie dump from yt-dlp is never user-actionable — steer to the reliable paths.
     const blocked = /cookies|not a bot|sign in to confirm|from-browser/i.test(m);
