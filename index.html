@@ -23,7 +23,7 @@
 
   /* command bar — a prompt to paste a link */
   #bar{position:fixed;top:18px;left:18px;z-index:2;display:flex;align-items:center;
-       width:min(440px,calc(100vw - 36px));height:44px;padding:0 6px 0 14px;
+       width:min(440px,calc(100vw - 36px));height:44px;padding:0 6px 0 8px;
        background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow);}
   #bar .prompt{color:var(--faint);font-size:14px;margin-right:9px;user-select:none;}
@@ -67,7 +67,7 @@
   .ctrl .reset{font-family:var(--mono);font-size:13px;line-height:1;color:var(--faint);background:none;border:none;cursor:pointer;padding:2px 0;transition:color .15s,transform .2s;}
   .ctrl .reset:hover{color:var(--text);transform:rotate(-90deg);}
   /* the chevron on the bar that expands the controls out of the bar itself */
-  #bar .cfgtoggle{padding:7px 9px;color:var(--muted);}
+  #bar .cfgtoggle{margin:0 6px 0 0;padding:6px 8px;color:var(--muted);} /* first item on the left */
   #bar .cfgtoggle:hover{color:var(--text);}
   #bar .cfgtoggle .chev{display:inline-block;font-size:10px;transition:transform .2s;}
   body.cfg-open #bar .cfgtoggle .chev{transform:rotate(180deg);}
@@ -142,10 +142,10 @@
   <div class="hint">paste a link, or drop an mp4, to watch it in ascii</div>
 </div>
 <div id="bar">
+  <button class="cfgtoggle" id="cfgtoggle" type="button" aria-label="toggle controls" aria-expanded="false"><span class="chev">▾</span></button>
   <span class="prompt">&gt;</span>
   <input id="url" type="text" placeholder="youtube.com/watch?v=..." spellcheck="false" autocomplete="off">
   <button id="load">load</button>
-  <button class="cfgtoggle" id="cfgtoggle" type="button" aria-label="toggle controls" aria-expanded="false"><span class="chev">▾</span></button>
 </div>
 <div id="loader"><div class="wave"></div><div class="msg"></div></div>
 <div id="status"></div>
