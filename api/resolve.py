@@ -21,6 +21,9 @@ import urllib.request
 
 ACTOR = "epctex~youtube-video-downloader"
 API = "https://api.apify.com/v2"
+MAX_CHARGE_USD = 0.10  # hard per-run spend cap: Apify aborts the run if the download would exceed this
+                       # (~11 min of 360p). Server-side backstop on cost, independent of the client's
+                       # 5-min duration gate.
 
 
 def _get(url):
@@ -36,7 +39,7 @@ def start(url, token):
         "storageType": "apify",  # Apify-hosted -> CORS-enabled + auto-expiring, no proxy/cleanup
     }).encode()
     req = urllib.request.Request(
-        f"{API}/acts/{ACTOR}/runs?token={urllib.parse.quote(token)}",
+        f"{API}/acts/{ACTOR}/runs?token={urllib.parse.quote(token)}&maxTotalChargeUsd={MAX_CHARGE_USD}",
         data=payload, headers={"Content-Type": "application/json"}, method="POST",
     )
     with urllib.request.urlopen(req, timeout=25) as r:
@@ -48,8 +51,10 @@ def poll(run_id, dataset_id, token):
     """Return {status} while running, or {status:'SUCCEEDED', streamUrl} once the mp4 is ready."""
     tok = urllib.parse.quote(token)
     status = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id)}?token={tok}")["data"]["status"]
+    if status == "ABORTED":  # almost always the maxTotalChargeUsd cap tripping on a too-long video
+        return {"status": "ABORTED", "error": "video too long (hit the cost limit)"}
     if status != "SUCCEEDED":
-        return {"status": status}  # READY / RUNNING / FAILED / ABORTED / TIMED-OUT
+        return {"status": status}  # READY / RUNNING / FAILED / TIMED-OUT
     items = _get(f"{API}/datasets/{urllib.parse.quote(dataset_id)}/items?token={tok}")
     for it in items:
         if it.get("demo"):  # actor's paid plan not active
