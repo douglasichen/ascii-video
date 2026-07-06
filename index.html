@@ -400,7 +400,12 @@ async function loadYouTube(url) {
     status.textContent = "";
     playSrc(body.streamUrl);
   } catch (err) {
-    status.textContent = "couldn’t load — " + (err.message || "try a direct video url or drop a file");
+    const m = err.message || "";
+    // The bot-block / cookie dump from yt-dlp is never user-actionable — steer to the reliable paths.
+    const blocked = /cookies|not a bot|sign in to confirm|from-browser/i.test(m);
+    status.textContent = blocked
+      ? "YouTube blocked this server — upload a video file (↑) or paste a direct video URL instead"
+      : "couldn’t load — " + (m || "try a direct video url or drop a file");
   }
 }
 
