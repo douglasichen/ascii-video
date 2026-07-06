@@ -30,11 +30,11 @@
   #bar input[type=text]{flex:1;min-width:0;font-family:var(--mono);font-size:13px;background:none;color:var(--text);border:none;outline:none;padding:0;height:100%;}
   #bar input[type=text]::placeholder{color:var(--muted);}
   #bar button{font-family:var(--mono);font-size:12px;letter-spacing:.02em;color:var(--text);background:rgba(255,255,255,0.06);
-       border:1px solid var(--border);border-radius:7px;padding:7px 15px;margin-left:8px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
+       border:1px solid var(--border);border-radius:7px;padding:7px 12px;margin-left:7px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,transform .05s;}
   #bar button:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
   #bar button:active{transform:translateY(1px);}
-  #bar button.icon{padding:7px 10px;color:var(--muted);}
-  #bar button.icon:hover{color:var(--text);}
+  #bar button#load{background:rgba(255,255,255,0.13);}
+  #bar button#load:hover{background:rgba(255,255,255,0.2);}
 
   /* drag-over cue: a hairline frame + hint while a file is over the window */
   #drop{position:fixed;inset:10px;z-index:5;border:1px dashed var(--border-strong);border-radius:16px;
@@ -42,12 +42,23 @@
         backdrop-filter:blur(2px);color:var(--text);font-size:14px;letter-spacing:.02em;pointer-events:none;}
   body.dragging #drop{display:flex;}
 
-  /* status message (loading / errors) under the bar */
-  #status{position:fixed;top:70px;left:22px;z-index:2;color:var(--muted);font-size:12px;max-width:min(440px,calc(100vw - 36px));}
+  /* error message — centered under the empty/loader stage so it reads with the middle, not a corner */
+  #status{position:fixed;top:calc(50% + 58px);left:50%;transform:translateX(-50%);z-index:2;color:var(--muted);
+       font-size:12.5px;text-align:center;max-width:min(460px,calc(100vw - 36px));}
 
-  /* control panel — a quiet instrument. .ctrl uses display:contents so every row's cells share one grid. */
-  #config{position:fixed;top:18px;right:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
-       gap:12px 12px;align-items:center;min-width:238px;padding:15px 16px;
+  /* loading — an on-theme ascii "scanner" that travels through the char ramp while Apify downloads.
+     Runs only during a youtube load (never during playback), so it costs the render loop nothing. */
+  #loader{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;display:none;}
+  #loader .wave{color:var(--muted);font-size:24px;line-height:1;white-space:pre;margin-bottom:20px;}
+  #loader .msg{color:var(--muted);font-size:13px;letter-spacing:.02em;}
+  body.loading #loader{display:block;}
+  body.loading #empty,body.playing #loader{display:none;}
+
+  /* control panel — a quiet instrument. Sits directly under the input bar in the same top-left column
+     (matched width) so the two read as one stack, not opposite corners. .ctrl uses display:contents so
+     every row's cells share one grid. */
+  #config{position:fixed;top:74px;left:18px;z-index:2;display:grid;grid-template-columns:auto 1fr auto auto;
+       gap:12px 12px;align-items:center;width:min(440px,calc(100vw - 36px));padding:15px 16px;
        background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);}
   .ctrl{display:contents;}
@@ -89,7 +100,7 @@
   body.playing #empty{display:none;}
 
   @media (max-width:560px){
-    #config{left:18px;right:18px;top:auto;bottom:18px;}
+    #config{left:18px;right:18px;width:auto;}
     #bar{width:calc(100vw - 36px);}
     #fps{display:none !important;}
   }
@@ -99,17 +110,18 @@
 <pre id="screen"></pre>
 <div id="empty">
   <div class="ramp">.:-=+*#%@</div>
-  <div class="hint">paste a link, or drop a video file, to watch it in ascii</div>
+  <div class="hint">paste a link, or drop an mp4, to watch it in ascii</div>
 </div>
 <div id="bar">
   <span class="prompt">&gt;</span>
   <input id="url" type="text" placeholder="youtube or video link" spellcheck="false" autocomplete="off">
-  <button id="pick" class="icon" title="upload a video file" aria-label="upload a video file">↑</button>
+  <button id="pick" title="upload an mp4 file" aria-label="upload an mp4 file">↑ upload</button>
   <button id="load">load</button>
 </div>
-<input id="file" type="file" accept="video/*" hidden>
+<input id="file" type="file" accept="video/mp4,.mp4" hidden>
+<div id="loader"><div class="wave"></div><div class="msg"></div></div>
 <div id="status"></div>
-<div id="drop">drop a video to play it in ascii</div>
+<div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
 <div id="config"></div>
 <canvas id="sample" style="display:none"></canvas>
@@ -384,32 +396,58 @@ function playSrc(src) {
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
 
+// Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
+function showError(msg) { stopLoader(); status.textContent = msg; }
+
 function loadFile(file) {
   if (!file) return;
-  if (!file.type.startsWith("video/")) { status.textContent = "that’s not a video file"; return; }
+  // We claim mp4-only. Reject anything else up front (covers both the upload button and drag-drop,
+  // since both route through here) rather than half-playing a format we don't promise to support.
+  const isMp4 = file.type === "video/mp4" || /\.mp4$/i.test(file.name);
+  if (!isMp4) return showError("sorry — we only accept mp4 files");
   status.textContent = "";
   playSrc(URL.createObjectURL(file));
 }
 
 // Resolve is a real ~60-100s download on Apify's side, so /api/resolve is non-blocking: it starts a
-// run and we poll it. Step through pipeline stages for feel; advance every few seconds and hold on the
-// last stage until the run finishes.
+// run and we poll it. While waiting, an on-theme ascii "scanner" (a bright pulse travelling through the
+// char ramp) animates in the centre, over a stage label that steps through the pipeline.
 const LOAD_STEPS = [
   "contacting server…", "fetching from youtube…", "downloading video…",
   "preparing stream…", "rendering ascii…",
 ];
+const loaderEl = document.getElementById("loader");
+const waveEl = loaderEl.querySelector(".wave");
+const msgEl = loaderEl.querySelector(".msg");
+let waveTimer = 0, stepTimer = 0;
+
+function startLoader() {
+  status.textContent = ""; // clear any prior error
+  document.body.classList.add("loading");
+  const W = 34; let t = 0, step = 0;
+  msgEl.textContent = LOAD_STEPS[0];
+  waveTimer = setInterval(() => {           // bright pulse orbits the ramp; wrap-around keeps it seamless
+    const center = (t += 0.7) % W;
+    let s = "";
+    for (let x = 0; x < W; x++) {
+      let d = Math.abs(x - center); d = Math.min(d, W - d);
+      s += RAMP[Math.max(0, (RAMP.length - 1) - Math.round(d * 1.5))];
+    }
+    waveEl.textContent = s;
+  }, 70);
+  stepTimer = setInterval(() => {           // advance the stage label, then hold on the last
+    step = Math.min(step + 1, LOAD_STEPS.length - 1);
+    msgEl.textContent = LOAD_STEPS[step];
+  }, 4000);
+}
+function stopLoader() {
+  document.body.classList.remove("loading");
+  clearInterval(waveTimer); clearInterval(stepTimer);
+}
 
 async function loadYouTube(url) {
-  let i = 0;
-  status.textContent = LOAD_STEPS[0];
-  const tick = setInterval(() => {
-    i = Math.min(i + 1, LOAD_STEPS.length - 1); // advance, then hold on the final stage
-    status.textContent = LOAD_STEPS[i];
-  }, 4000);
-  const fail = (m) => {
-    clearInterval(tick);
-    status.textContent = "couldn’t load — " + (m || "try a direct video url or drop a file");
-  };
+  startLoader();
+  const fail = (m) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
 
   let job;
   try {
@@ -419,13 +457,13 @@ async function loadYouTube(url) {
 
   const deadline = Date.now() + 240000; // give up after 4 min
   const poll = async () => {
-    if (Date.now() > deadline) return fail("this took too long — try again or upload a file");
+    if (Date.now() > deadline) return fail("this took too long — try again or upload an mp4");
     let s;
     try {
       s = await fetch("/api/resolve?runId=" + encodeURIComponent(job.runId) +
                       "&datasetId=" + encodeURIComponent(job.datasetId)).then((r) => r.json());
     } catch { return setTimeout(poll, 3000); } // transient network blip — keep polling
-    if (s.streamUrl) { clearInterval(tick); status.textContent = ""; return playSrc(s.streamUrl); }
+    if (s.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(s.streamUrl); }
     if (["FAILED", "ABORTED", "TIMED-OUT"].includes(s.status)) return fail(s.error || s.status);
     setTimeout(poll, 3000); // READY / RUNNING — keep waiting
   };
@@ -461,6 +499,16 @@ document.addEventListener("drop", e => {
   e.preventDefault();
   dragDepth = 0; document.body.classList.remove("dragging");
   if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+// Warn before closing once something's actually playing — leaving loses the ascii video. Only armed
+// while playing (no nag on the empty page). Browsers show their own generic text; the custom string is
+// ignored by modern browsers, but setting returnValue is what triggers the confirm prompt.
+window.addEventListener("beforeunload", e => {
+  if (document.body.classList.contains("playing")) {
+    e.preventDefault();
+    e.returnValue = "are you sure you wanna close? you’ll lose your ascii video";
+  }
 });
 
 document.addEventListener("keydown", e => {
