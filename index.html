@@ -142,7 +142,7 @@ let cols = 0, rows = 0;
 let DEBUG = false;
 
 const CONTROLS = {
-  detail: { label: "detail", min: 1, max: 8, step: 1, default: 8, unit: "" },
+  detail: { label: "resolution", min: 1, max: 8, step: 1, default: 8, unit: "" },
   contrast: { label: "contrast", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   brightness: { label: "brightness", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   invert: { label: "invert", type: "checkbox", default: false },
@@ -223,7 +223,15 @@ function computeGrid() {
 }
 
 function onMetadata() { computeGrid(); }
-window.addEventListener("resize", computeGrid);
+// Recompute the grid on a real window resize, but NOT on browser zoom (cmd +/-). Both fire a resize and
+// both shrink/grow innerWidth in CSS px — but zoom ALSO changes devicePixelRatio, a genuine resize does
+// not. So if dpr moved, it was a zoom: leave the resolution fixed and let the zoom just magnify the
+// (crisp, DOM-text) output, instead of resampling to a new grid.
+let lastDpr = window.devicePixelRatio;
+window.addEventListener("resize", () => {
+  if (window.devicePixelRatio !== lastDpr) { lastDpr = window.devicePixelRatio; return; }
+  computeGrid();
+});
 
 const RAMP_LAST = RAMP.length - 1;
 const RAMP_SCALE = RAMP.length / 255;
