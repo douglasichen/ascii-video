@@ -114,7 +114,7 @@
 </div>
 <div id="bar">
   <span class="prompt">&gt;</span>
-  <input id="url" type="text" placeholder="youtube link" spellcheck="false" autocomplete="off">
+  <input id="url" type="text" placeholder="youtube.com/watch?v=..." spellcheck="false" autocomplete="off">
   <button id="load">load</button>
 </div>
 <div id="loader"><div class="wave"></div><div class="msg"></div></div>
@@ -388,8 +388,16 @@ scheduleFrame();
 //  • a direct VIDEO URL -> used as-is (needs CORS on that host for getImageData; crossorigin is set).
 //  • a YOUTUBE link -> /api/resolve turns it into a stream URL. Best-effort: from a cloud host YouTube
 //    often bot-blocks the resolver, so file/direct-url are the reliable paths (see CLAUDE.md Deployment).
+const MAX_SECONDS = 300; // deny anything longer than 5 minutes (both youtube + dropped files)
 function playSrc(src) {
-  video.onloadedmetadata = onMetadata;
+  video.onloadedmetadata = () => {
+    if (isFinite(video.duration) && video.duration > MAX_SECONDS) {
+      video.pause(); video.removeAttribute("src"); video.load(); // stop + release the source
+      document.body.classList.remove("playing");
+      return showError("sorry — we only support videos under 5 minutes");
+    }
+    onMetadata();
+  };
   video.src = src;
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
@@ -443,7 +451,22 @@ function stopLoader() {
   clearInterval(waveTimer); clearInterval(stepTimer);
 }
 
+// Strip playlist / index / timestamp cruft down to a clean watch URL so we resolve the single video the
+// user pasted, not the playlist it lives in. Handles watch?v=, youtu.be/, shorts/, embed/, live/.
+// Falls back to the raw string if no 11-char id is found (let the resolver try).
+function normalizeYouTube(raw) {
+  try {
+    const u = new URL(raw.includes("://") ? raw : "https://" + raw);
+    let id = u.searchParams.get("v") || "";
+    if (!id && u.hostname.includes("youtu.be")) id = u.pathname.slice(1);
+    if (!id) { const m = u.pathname.match(/\/(?:shorts|embed|live|v)\/([^/?#]+)/); if (m) id = m[1]; }
+    id = id.split(/[/?#&]/)[0];
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? "https://www.youtube.com/watch?v=" + id : raw;
+  } catch { return raw; }
+}
+
 async function loadYouTube(url) {
+  url = normalizeYouTube(url);
   startLoader();
   const fail = (m) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
 
