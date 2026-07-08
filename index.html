@@ -420,11 +420,11 @@ const CONTROLS = {
   fade: { label: "fade audio", section: "advanced", type: "checkbox", default: true },
   // ── music reactive ───────────────────────────────────────────────────────
   // The audio drives resolution + colour + a brightness/contrast pulse each frame (Web Audio AnalyserNode +
-  // an adaptive beat detector; see applyReactivity). ON by default. It reacts to AUDIBLE audio — the muted
+  // an adaptive beat detector; see applyReactivity). OFF by default. It reacts to AUDIBLE audio — the muted
   // auto-load clip won't pulse until you tap the speaker (a user-loaded clip plays unmuted and reacts
   // immediately), since the analyser taps the element's captured, post-mute output. `base` holds the resting
   // slider values; the audio swings around them and turning music off restores `base` exactly.
-  react: { label: "music reactive", section: "music", type: "checkbox", default: true },
+  react: { label: "music reactive", section: "music", type: "checkbox", default: false },
   sensitivity: { label: "sensitivity", section: "music", min: 0, max: 100, step: 1, default: 55, unit: "%" },
   // per-target react amounts (how hard the beat drives each, 0 = that target doesn't react). Under the MUSIC
   // header so "brightness"/"contrast"/"colour"/"resolution" read as "how much music drives this target".
