@@ -472,6 +472,12 @@ cfgToggle.addEventListener("click", () => {
 
 function computeGrid() {
   if (!video.videoWidth) return;
+  // Freeze the grid while baking an embed. recFrames are captured at the CURRENT cols*rows and the header
+  // stores ONE cols/rows for the whole file; if anything (music reactivity's res-punch, a resize, a control
+  // tweak) regrids mid-bake, frames of different sizes land in one file and the decoder reads garbage past
+  // the header's N -> severe glitching. One guard here covers every caller. (state.detail may still move;
+  // paint() reads cols/rows, not state.detail, so the captured frames stay consistent.)
+  if (recording) return;
   const fontPx = 22 - state.detail * 2; // detail 1 (chunky, 20px) .. 9 (fine, 4px)
   const barH = bar.offsetHeight; // top URL bar is fixed and opaque; keep the grid clear of it
   const availH = window.innerHeight - barH;
@@ -670,17 +676,24 @@ function initAudio() {
   if (audioReady) return;
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = audioCtx.createMediaElementSource(video); // once per element for its lifetime
+    // Feed the analyser from a CAPTURED stream, NOT createMediaElementSource(video). The element-source
+    // node PERMANENTLY reroutes the <video>'s audio into the graph, which then makes the embed bake's
+    // video.captureStream().getAudioTracks() come back silent/empty — so every embed baked after music
+    // mode was ever on had no sound. A MediaStreamAudioSource taps a copy and leaves the element's own
+    // audio path (speakers + captureStream) completely untouched.
+    const src = audioCtx.createMediaStreamSource(video.captureStream());
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                // 512 bins, ~43 Hz/bin at 44.1kHz
     analyser.smoothingTimeConstant = 0.55;  // some smoothing, but keep transients for beats
     src.connect(analyser);
-    analyser.connect(audioCtx.destination); // MUST forward or audio goes silent
+    // Sink at gain 0: keeps the graph pulled (so getByteFrequencyData fills on every browser) WITHOUT
+    // re-emitting the captured audio to the speakers — the element already plays it, so a full-gain
+    // forward here would double/echo. (With the old element-source this had to be full gain; not anymore.)
+    const sink = audioCtx.createGain(); sink.gain.value = 0;
+    analyser.connect(sink); sink.connect(audioCtx.destination);
     freqData = new Uint8Array(analyser.frequencyBinCount);
     audioReady = true;
-  } catch (e) { /* already-created / no audio track / cross-origin video -> reactivity just stays off */ }
-  // ponytail: createMediaElementSource reroutes the element's audio through the graph, which can silence
-  // the embed bake's captureStream() audio while music is on — niche combo, left as a known limitation.
+  } catch (e) { /* no captureStream / no audio track / cross-origin (tainted) video -> reactivity stays off */ }
 }
 const bandAvg = (a, lo, hi) => { let s = 0; for (let i = lo; i < hi; i++) s += a[i]; return s / (hi - lo) / 255; };
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;

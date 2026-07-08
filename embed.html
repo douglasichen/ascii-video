@@ -76,6 +76,12 @@ const errEl = document.getElementById("err");
 const tap = document.getElementById("tap");
 const audioEl = document.getElementById("audio");
 let frames = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0, fadeOn = false;
+// Authoritative loop period (seconds) from the header. Used to map the clock -> frame index instead of
+// t*fps: fps is round(frameCount/dur) (an average over an UNEVEN, maxfps-throttled capture), so t*fps
+// drifts from the real loop length and the ascii wraps a hair before/after the audio -> a visible jump
+// every loop. Mapping the phase across [0,clipDur) makes frames and audio wrap together. Also survives
+// MediaRecorder webm blobs whose audioEl.duration reports Infinity.
+let clipDur = 10;
 
 // Real monospace glyph advance (as a fraction of font-size), measured once from the actual rendered font
 // so the grid fills to the constraining edge exactly rather than assuming a magic 0.6 that varies by font.
@@ -110,13 +116,21 @@ let clockBase = performance.now();
 function loop() {
   // audio clock when it's actually playing past 0 (A/V sync); wall clock otherwise (blocked/buffering/muted/none)
   const at = audioEl.currentTime;
-  const t = (audioEl.src && !audioEl.paused && at > 0) ? at : (performance.now() - clockBase) / 1000;
-  if (fadeOn && audioEl.src && isFinite(audioEl.duration) && audioEl.duration > 0) {
-    const d = audioEl.duration, f = Math.min(1.5, d / 3); // fade window (shrinks for short clips)
-    let v = 1; if (at < f) v = at / f; else if (at > d - f) v = (d - at) / f;
+  const audioLive = !!audioEl.src && !audioEl.paused && at > 0;
+  // Force-loop the audio on clipDur when its own duration is unusable (MediaRecorder webm often reports
+  // Infinity, so <audio loop> never wraps it) — otherwise the sound plays through once then goes silent
+  // while the ascii keeps looping. When duration IS finite we leave native loop=true to wrap it.
+  if (audioLive && !(isFinite(audioEl.duration) && audioEl.duration > 0) && at >= clipDur) audioEl.currentTime = 0;
+  const t = audioLive ? audioEl.currentTime : (performance.now() - clockBase) / 1000;
+  if (fadeOn && audioLive) {
+    const f = Math.min(1.5, clipDur / 3); // fade window (shrinks for short clips)
+    const a = at % clipDur;
+    let v = 1; if (a < f) v = a / f; else if (a > clipDur - f) v = (clipDur - a) / f;
     audioEl.volume = v < 0 ? 0 : v > 1 ? 1 : v;
   }
-  draw(Math.floor(t * fps));
+  // Phase within the loop -> frame index. clipDur (not t*fps) so frames complete exactly one cycle per
+  // loop and wrap in lockstep with the audio; draw() re-mods defensively.
+  draw(Math.floor((t % clipDur) / clipDur * frames.length));
   raf = requestAnimationFrame(loop);
 }
 
@@ -179,6 +193,8 @@ async function load() {
 
   const h = dec.header;
   frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading; fadeOn = !!h.fade;
+  // Loop period: header durationMs is authoritative; fall back to frameCount/fps if it's missing/bogus.
+  clipDur = (h.durationMs > 0 ? h.durationMs / 1000 : 0) || (frames.length / fps) || 10;
   document.head.appendChild(document.createElement("style")).textContent = ASCIIV.buildPaletteCSS(h.colour);
   screen.style.color = h.colour;
   loadEl.style.display = "none";
