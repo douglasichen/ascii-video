@@ -135,8 +135,10 @@
   body.playing #empty{display:none;}
 
   /* generate-embed button (only while a video plays) + the snippet modal */
-  /* primary CTA (top-right) — an inverted, filled button so it clearly reads as the main action */
-  #embed{position:fixed;top:18px;right:18px;z-index:3;display:none;align-items:center;gap:7px;font-family:var(--mono);
+  /* top-right action row: sound toggle + the primary "save" CTA sit side by side (sound to its left) */
+  #actions{position:fixed;top:18px;right:18px;z-index:3;display:flex;align-items:center;gap:10px;}
+  /* primary CTA — an inverted, filled button so it clearly reads as the main action */
+  #embed{display:none;align-items:center;gap:7px;font-family:var(--mono);
        font-size:12.5px;letter-spacing:.02em;color:var(--bg);background:var(--text);
        border:1px solid var(--text);border-radius:9px;padding:10px 15px;cursor:pointer;box-shadow:var(--shadow);transition:opacity .15s,transform .05s;}
   #embed:hover{opacity:.88;}
@@ -145,8 +147,8 @@
   body.playing #embed{display:flex;}
   /* audio toggle — a round speaker button (shown whenever a clip plays). Desktop autoplays with sound;
      mobile autoplays muted (policy) and this pulses to invite a tap. .muted swaps the waves for a slash. */
-  #audio{position:fixed;bottom:16px;left:16px;z-index:4;display:none;align-items:center;justify-content:center;
-       width:42px;height:42px;color:var(--text);background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  #audio{display:none;align-items:center;justify-content:center;
+       width:40px;height:40px;color:var(--text);background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:50%;cursor:pointer;box-shadow:var(--shadow);transition:background .15s,border-color .15s;}
   #audio:hover{background:rgba(255,255,255,0.13);border-color:var(--border-strong);}
   #audio .slash{display:none;}
@@ -210,17 +212,19 @@
 <div id="drop">drop an mp4 to play it in ascii</div>
 <div id="fps"></div>
 <div id="config"></div>
-<button id="embed" aria-label="save embed">
-  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
-  save
-</button>
-<button id="audio" aria-label="toggle sound">
-  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 9v6h4l5 4V5L8 9z"/>
-    <g class="waves"><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a8 8 0 0 1 0 12"/></g>
-    <g class="slash"><path d="M22 9l-6 6"/><path d="M16 9l6 6"/></g>
-  </svg>
-</button>
+<div id="actions">
+  <button id="audio" aria-label="toggle sound">
+    <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 9v6h4l5 4V5L8 9z"/>
+      <g class="waves"><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a8 8 0 0 1 0 12"/></g>
+      <g class="slash"><path d="M22 9l-6 6"/><path d="M16 9l6 6"/></g>
+    </svg>
+  </button>
+  <button id="embed" aria-label="save embed">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+    save
+  </button>
+</div>
 <div id="boundlbl">▢ embed capture frame</div>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into your website!</div>
@@ -313,9 +317,12 @@ const CONTROLS = {
   // music off restores `base` exactly. Each target has its own amount so it's independently tunable.
   react: { label: "music reactive", section: "music", type: "checkbox", default: false },
   sensitivity: { label: "sensitivity", section: "music", min: 0, max: 100, step: 1, default: 55, unit: "%" },
-  punch: { label: "punch", section: "music", min: 0, max: 100, step: 1, default: 60, unit: "%" },
-  colorReact: { label: "colour react", section: "music", min: 0, max: 100, step: 1, default: 70, unit: "%" },
-  resReact: { label: "res react", section: "music", min: 0, max: 100, step: 1, default: 50, unit: "%" },
+  // per-target react amounts (how hard the beat drives each, 0 = that target doesn't react). Under the MUSIC
+  // header so "brightness"/"contrast"/"colour"/"resolution" read as "how much music drives this target".
+  punch: { label: "brightness", section: "music", min: 0, max: 100, step: 1, default: 60, unit: "%" },
+  contrastReact: { label: "contrast", section: "music", min: 0, max: 100, step: 1, default: 45, unit: "%" },
+  colorReact: { label: "colour", section: "music", min: 0, max: 100, step: 1, default: 70, unit: "%" },
+  resReact: { label: "resolution", section: "music", min: 0, max: 100, step: 1, default: 50, unit: "%" },
 };
 // `state` = live values read each frame; `base` = the user's resting values (music mode modulates the
 // DRIVEN keys in `state` around `base`). setControl writes both; applyReactivity overwrites state's DRIVEN.
@@ -662,20 +669,20 @@ function applyReactivity(now) {
   }
   rx.env *= 0.86; // exponential envelope decay — the smooth pulse
 
-  const punch = state.punch / 100, cr = state.colorReact / 100, rr = state.resReact / 100;
+  const punch = state.punch / 100, cor = state.contrastReact / 100, cr = state.colorReact / 100, rr = state.resReact / 100;
   rx.hue += 0.2 + rx.bass * 1.4 + rx.treb * 0.8; // continuous drift, faster on busier tracks
 
   // colour: blend the user's base colour toward the audio-driven hue by the colour-react amount
   if (cr > 0) {
-    const light = clamp(46 + rx.env * 26 * punch + rx.mid * 16, 22, 82);
+    const light = clamp(46 + rx.env * 26 + rx.mid * 16, 22, 82);
     const sat = clamp(58 + rx.treb * 42, 40, 100);
     state.color = mixHex(base.color, hslHex(rx.hue, sat, light), cr);
   } else state.color = base.color;
   buildPalette(state.color);
 
-  // brightness/contrast beat pulse (folds into CONTRAST_LUT for free), scaled by punch
-  state.brightness = clamp(base.brightness + rx.env * 42 * punch + rx.bass * 12 - 6, 0, 100);
-  state.contrast = clamp(base.contrast + rx.env * 30 * punch + rx.treb * 22, 0, 100);
+  // brightness + contrast each pulse on the beat, independently scaled (fold into CONTRAST_LUT for free)
+  state.brightness = clamp(base.brightness + (rx.env * 42 + rx.bass * 12 - 6) * punch, 0, 100);
+  state.contrast = clamp(base.contrast + (rx.env * 30 + rx.treb * 22) * cor, 0, 100);
   // resolution "zoom-punch": a strong beat momentarily coarsens the grid, scaled by resolution-react.
   // Integer + regrid only on change, so the sample canvas isn't reallocated every frame.
   const d = Math.round(clamp(base.detail - rx.env * rr * 2.5, 1, 9));

@@ -190,10 +190,11 @@ without muting playback. `applyReactivity(now)` runs each render frame *before*
 `paint()` and, on a beat (energy-based detector on the ~43–215 Hz kick band,
 adaptive `mean + k·std`, 200 ms refractory), pumps an envelope that drives the
 **DRIVEN** keys (`brightness`, `contrast`, `color`, `detail`) — writing them into
-`state` from `base` + audio. Each target is independently tunable: `sensitivity`
-(beat threshold), `punch` (brightness/contrast flash), `colorReact` (blends
-`base.color` → an audio-driven hue via `mixHex`/`hslHex`), `resReact` (beat
-"zoom-punch" on the resolution grid). Key non-regression property: **off by
+`state` from `base` + audio. Each target has its own react amount (0 = that
+target doesn't react): `sensitivity` (beat threshold), `punch` (brightness
+flash), `contrastReact` (contrast flash), `colorReact` (blends `base.color` → an
+audio-driven hue via `mixHex`/`hslHex`), `resReact` (beat "zoom-punch" on the
+resolution grid). Key non-regression property: **off by
 default, and turning it off restores `state` to `base` exactly** — so main's
 default behaviour and the shipped look are unchanged. It stays fast because it
 only ever changes *which* single base colour `buildPalette()` ramps to (still ≤8
