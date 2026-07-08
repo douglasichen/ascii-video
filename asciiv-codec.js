@@ -4,7 +4,11 @@
  *
  * Container (little-endian):
  *   "ASCV" | u32 headerLen | header JSON | u32 audioLen | audio bytes | gzip(frame stream)
- * header: { v, fps, cols, rows, frameCount, colour, shading, durationMs, audioMime }
+ * header: { v, fps, cols, rows, frameCount, colour, shading, durationMs, audioMime, times? }
+ * `times` (optional, added without a version bump — still v:1): per-frame capture timestamps in ms
+ *   relative to recording start, monotonic non-decreasing, length == frameCount. Playback maps the audio
+ *   clock -> frame by these real times instead of even phase (capture is maxfps/rVFC-throttled, i.e. UNEVEN
+ *   in time, so frame i's true instant isn't i/frameCount*clipDur). Absent on old files -> even-phase fallback.
  * frame stream (pre-gzip): frame0 = cols*rows char-indices (0..9); frameK = u32 changed count, then
  *   count*(u32 cellIndex, u8 charIndex) applied over the running grid. Low motion -> tiny deltas.
  *
@@ -36,7 +40,25 @@
     if (!isInt(h.fps, 1, MAX_FPS)) return false;
     if (h.audioMime != null && h.audioMime !== "" &&
         !(typeof h.audioMime === "string" && AUDIO_MIME_OK.test(h.audioMime))) return false;
+    // Optional per-frame timestamps: if present must be one finite, non-negative, non-decreasing number per
+    // frame (bounds the array to frameCount, already capped). Malformed -> fail closed like any other field.
+    if (h.times != null) {
+      if (!Array.isArray(h.times) || h.times.length !== h.frameCount) return false;
+      let prev = -1;
+      for (const x of h.times) { if (!Number.isFinite(x) || x < prev) return false; prev = x; }
+    }
     return true;
+  }
+
+  // Map a playback clock (ms, any value >= 0) to a frame index using per-frame capture timestamps.
+  // Wraps the clock into [0, periodMs) then binary-searches for the last frame whose timestamp <= phase —
+  // so frames advance at their REAL captured cadence and wrap in lockstep with the loop period. times must
+  // be monotonic non-decreasing (validHeader guarantees it); the returned index is always in [0, len).
+  function frameAt(times, periodMs, tMs) {
+    let p = tMs % periodMs; if (p < 0) p += periodMs;
+    let lo = 0, hi = times.length - 1, r = 0;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (times[m] <= p) { r = m; lo = m + 1; } else hi = m - 1; }
+    return r;
   }
 
   // #screen <style>: level i ramps black -> base colour. Mirrors the main app's buildPalette().
@@ -145,7 +167,7 @@
     return { header, frames, audio: audio ? audio.slice() : null };
   }
 
-  const api = { RAMP, LEVELS, encodeAsciiv, decodeAsciiv, buildRows, buildPaletteCSS, validHeader };
+  const api = { RAMP, LEVELS, encodeAsciiv, decodeAsciiv, buildRows, buildPaletteCSS, validHeader, frameAt };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.ASCIIV = api;
 })(typeof self !== "undefined" ? self : this);

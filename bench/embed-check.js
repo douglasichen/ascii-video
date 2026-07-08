@@ -122,6 +122,21 @@ async function testFailClosed() {
     { ...good, audioMime: "audio/wav" }, // disallowed mime
     { ...good, audioMime: "text/plain" },
   ];
+  // optional `times`: accepted when well-formed, rejected when malformed (untrusted -> fail closed)
+  const t3 = { ...good, frameCount: 3 };
+  ok(ASCIIV.validHeader({ ...t3, times: [0, 10, 20] }) === true, "validHeader accepts monotonic times of length==frameCount");
+  ok(ASCIIV.validHeader({ ...t3, times: [0, 0, 20] }) === true, "validHeader accepts non-strict (equal) monotonic times");
+  const badTimes = [
+    { ...t3, times: [0, 10] },          // wrong length
+    { ...t3, times: [0, 10, 20, 30] },  // wrong length
+    { ...t3, times: [0, 20, 10] },      // decreasing
+    { ...t3, times: [0, -5, 10] },      // negative
+    { ...t3, times: [0, NaN, 20] },     // non-finite
+    { ...t3, times: "0,10,20" },        // not an array
+    { ...t3, times: {} },               // not an array
+  ];
+  for (const b of badTimes) ok(ASCIIV.validHeader(b) === false, `validHeader rejects bad times ${JSON.stringify(b.times).slice(0, 22)}`);
+
   for (const b of bads) ok(ASCIIV.validHeader({ ...b, frameCount: 1 }) === false, `validHeader rejects ${JSON.stringify(b).slice(0, 44)}`);
   ok(ASCIIV.validHeader({ ...good, frameCount: 0 }) === false, "validHeader rejects frameCount < 1");
   ok(ASCIIV.validHeader({ ...good, frameCount: 1 }) === true, "validHeader accepts a good header");
@@ -270,10 +285,124 @@ function testPhaseMapping() {
   console.log("PASS: audio loop mode picks manual for Infinity/NaN/0, native for finite duration");
 }
 
+// ---------------------------------------------------------------------------
+// 4. TIMESTAMP-DRIVEN FRAME MAPPING — the A/V-sync fix (embed.html loop() + ASCIIV.frameAt)
+// ---------------------------------------------------------------------------
+// The bug: capture is maxfps/rVFC-throttled, so frames land at UNEVEN times, but playback assumed frame i
+// sits at i/n*clipDur (even phase). The fix stores each frame's real capture time and looks up audio-time ->
+// frame by those. Cover: times round-trip through the codec; frameAt is monotonic, covers all frames, and
+// wraps in lockstep; on a synthetic UNEVEN capture the lookup beats even-phase against ground truth; and a
+// v:1 file with no times still decodes and the player-side fallback (even phase) still holds.
+async function testTimestamps() {
+  const { frameAt } = ASCIIV;
+
+  // (a) times survive encode/decode byte-for-byte alongside frames
+  {
+    const cols = 20, rows = 10, N = cols * rows, frameCount = 40;
+    const frames = [], g = new Uint8Array(N);
+    frames.push(g.slice());
+    for (let k = 1; k < frameCount; k++) { g[k % N] = k % (RAMP_LAST + 1); frames.push(g.slice()); }
+    // jittered monotonic times (ms), ~clipDur 4s: real capture is uneven, so gaps vary
+    const rnd = mulberry32(0x71E5);
+    const times = []; let acc = 0;
+    for (let k = 0; k < frameCount; k++) { times.push(Math.round(acc)); acc += 20 + rnd() * 160; }
+    const header = { fps: 12, cols, rows, colour: "#88ccff", shading: true, fade: false, durationMs: 4000, times, audioMime: "" };
+    const dec = await ASCIIV.decodeAsciiv(await ASCIIV.encodeAsciiv(header, frames, null));
+    deep(dec.header.times, times, "times[] round-trips through encode/decode");
+    eq(dec.header.times.length, frameCount, "times length == frameCount after decode");
+  }
+
+  // (b) frameAt sweeps [0,n) once per period: monotonic non-decreasing, starts 0, hits every frame, wraps to 0
+  {
+    const n = 50, period = 5000; // ms
+    // uneven timeline in [0,period): distinct, monotonic
+    const rnd = mulberry32(0x1234);
+    const times = []; let acc = 0;
+    for (let k = 0; k < n; k++) { times.push(Math.round(acc)); acc += 1 + rnd() * ((period * 0.9) / n); }
+    const seen = new Set(); let prev = -1;
+    for (let s = 0; s < 6000; s++) {
+      const t = (s / 6000) * period;
+      const i = frameAt(times, period, t);
+      ok(i >= 0 && i < n, "frameAt in range");
+      ok(i >= prev, "frameAt monotonic non-decreasing within a period");
+      prev = i; seen.add(i);
+    }
+    eq(frameAt(times, period, 0), 0, "frameAt: period starts at frame 0");
+    eq(seen.size, n, "frameAt: every frame is hit across one period");
+    eq(frameAt(times, period, period), 0, "frameAt: wraps to 0 exactly at period");
+    eq(frameAt(times, period, period + 1e-6), 0, "frameAt: stays wrapped just past period");
+    eq(frameAt(times, period, 2 * period + times[3]), 3, "frameAt: phase-locked across multiple periods");
+    // lands on the correct frame at each stored instant (the frame whose time just started)
+    for (let k = 0; k < n; k++) eq(frameAt(times, period, times[k]), k, `frameAt hits frame ${k} at its own timestamp`);
+    console.log("PASS: frameAt sweeps [0,n) once, is monotonic, hits every frame, and wraps in lockstep");
+  }
+
+  // (c) THE FIX vs THE BUG on a synthetic UNEVEN capture. Build a ground-truth capture: a frame is painted
+  // at each (jittery) time; the frame VISIBLE at wall-time t is the last one painted at-or-before t. Compare
+  //   - timestamp lookup (frameAt) — should match ground truth exactly
+  //   - old even-phase floor(t/period*n) — wrong wherever capture was uneven
+  // and assert the fix's total error is ~0 while even-phase's is materially worse.
+  {
+    const n = 60, period = 6000;
+    const rnd = mulberry32(0xBEEF);
+    // strongly uneven cadence: alternating fast/slow bursts (a stall then a flurry — the real rVFC pattern)
+    const times = []; let acc = 0;
+    for (let k = 0; k < n; k++) {
+      times.push(acc);
+      const slow = (k % 7 === 0);                 // periodic hitch
+      acc += slow ? 260 : 20 + rnd() * 70;
+    }
+    // normalize so the last frame sits inside the period (period is the loop length, > last frame time)
+    const span = times[n - 1] + 40;
+    for (let k = 0; k < n; k++) times[k] = Math.round((times[k] / span) * (period * 0.98));
+    // t >= 0 here, so a single mod (like frameAt) — a double-mod ((t%period)+period)%period loses float
+    // precision near a boundary (adds period back, rounding e.g. 3014.999… up to 3015) and would spuriously disagree.
+    const truth = (t) => { const p = t % period; let r = 0; for (let k = 0; k < n; k++) if (times[k] <= p) r = k; return r; };
+    const evenPhase = (t) => { const p = t % period; return Math.min(n - 1, Math.floor(p / period * n)); };
+    let fixErr = 0, oldErr = 0, fixMax = 0, oldMax = 0;
+    const S = 4000;
+    for (let s = 0; s < S; s++) {
+      const t = (s / S) * period;
+      const gt = truth(t);
+      const df = Math.abs(frameAt(times, period, t) - gt);
+      const dp = Math.abs(evenPhase(t) - gt);
+      fixErr += df; oldErr += dp; if (df > fixMax) fixMax = df; if (dp > oldMax) oldMax = dp;
+    }
+    eq(fixErr, 0, "fix: timestamp lookup matches ground-truth frame at every sampled instant (0 error)");
+    eq(fixMax, 0, "fix: worst-case frame error is 0");
+    ok(oldErr > 0, `old even-phase is wrong on uneven capture (total |err| = ${oldErr} frames over ${S} samples)`);
+    ok(oldMax >= 2, `old even-phase peak error is a visible ${oldMax}-frame lead/lag`);
+    ok(fixErr < oldErr, "fix strictly reduces the animation-vs-audio frame error vs even-phase");
+    console.log(`PASS: on uneven capture the timestamp fix is exact (0 err) where even-phase drifts (${oldErr} frame-err, peak ${oldMax})`);
+  }
+
+  // (d) BACKWARD COMPAT: a v:1 file with NO times still decodes; player-side guard leaves times=null and the
+  // even-phase mapping (unchanged) is used. Mirrors embed.html load(): times = valid array of right length else null.
+  {
+    const cols = 16, rows = 8, N = cols * rows, frameCount = 25;
+    const frames = [new Uint8Array(N)];
+    for (let k = 1; k < frameCount; k++) { const g = frames[k - 1].slice(); g[k] = k % (RAMP_LAST + 1); frames.push(g); }
+    const header = { fps: 10, cols, rows, colour: "#ffffff", shading: true, fade: false, durationMs: 2500, audioMime: "" };
+    const bytes = await ASCIIV.encodeAsciiv(header, frames, null);
+    const dec = await ASCIIV.decodeAsciiv(bytes);
+    eq(dec.header.v, 1, "v:1 preserved (times added without a version bump)");
+    ok(dec.header.times === undefined, "old-style header has no times field");
+    ok(ASCIIV.validHeader(dec.header) === true, "validHeader accepts a v:1 header without times");
+    const playerTimes = Array.isArray(dec.header.times) && dec.header.times.length === dec.frames.length ? dec.header.times : null;
+    eq(playerTimes, null, "player falls back to null times -> even-phase mapping");
+    // even-phase fallback still sweeps [0,n) once (the pre-existing behaviour, still correct for old files)
+    const n = dec.frames.length, period = dec.header.durationMs / 1000, seen = new Set();
+    for (let s = 0; s < 3000; s++) seen.add(Math.floor(((s / 3000 * period) % period) / period * n));
+    eq(seen.size, n, "v:1 fallback even-phase still hits every frame");
+    console.log("PASS: v:1 (no times) decodes and cleanly falls back to even-phase mapping");
+  }
+}
+
 (async () => {
   await testRoundTrip();
   await testFailClosed();
   await testCaptureInvariant();
   testPhaseMapping();
+  await testTimestamps();
   console.log(`\nALL GREEN — ${passes} assertions passed`);
 })().catch((e) => { console.error("FAIL:", e); process.exit(1); });
