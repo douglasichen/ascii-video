@@ -1197,7 +1197,14 @@ document.getElementById("embedcopy").addEventListener("click", () => {
   if (navigator.clipboard) navigator.clipboard.writeText(embedCode.value);
   const b = document.getElementById("embedcopy"); b.textContent = "copied"; setTimeout(() => (b.textContent = "copy"), 1200);
 });
-document.getElementById("embedclose").addEventListener("click", () => (embedWrap.hidden = true));
+// Close returns you to the player. Also drop the baking cover: it only exists to hide the seek/scrub behind
+// the snippet card, so once the card is dismissed there's nothing to cover — the bake finishes in the
+// background (the "playing" event / finally still fire). Without this you'd close the card onto the opaque
+// "generating your embed…" screen instead of your clip.
+document.getElementById("embedclose").addEventListener("click", () => {
+  embedWrap.hidden = true;
+  document.body.classList.remove("baking");
+});
 
 // feedback: a text field that POSTs to /api/feedback (stored server-side in a private S3 bucket).
 const fbWrap = document.getElementById("fbwrap");
