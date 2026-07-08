@@ -138,14 +138,15 @@
   /* generate-embed button (only while a video plays) + the snippet modal */
   /* top-right action row: sound toggle + the primary "save" CTA sit side by side (sound to its left) */
   #actions{position:fixed;top:18px;right:18px;z-index:3;display:flex;align-items:center;gap:10px;}
-  /* primary CTA — an inverted, filled button so it clearly reads as the main action */
-  #embed{display:none;align-items:center;gap:7px;font-family:var(--mono);
+  /* primary CTA — an inverted, filled button so it clearly reads as the main action. Always visible, but
+     disabled (greyed, non-interactive) whenever there's no ascii animation to save. */
+  #embed{display:flex;align-items:center;gap:7px;font-family:var(--mono);
        font-size:12.5px;letter-spacing:.02em;color:var(--bg);background:var(--text);
        border:1px solid var(--text);border-radius:9px;padding:10px 15px;cursor:pointer;box-shadow:var(--shadow);transition:opacity .15s,transform .05s;}
   #embed:hover{opacity:.88;}
   #embed:active{transform:translateY(1px);}
   #embed:disabled{opacity:.5;cursor:default;}
-  body.playing #embed{display:flex;}
+  body:not(.playing) #embed{opacity:.4;cursor:default;pointer-events:none;}
   /* audio toggle — a round speaker button (shown whenever a clip plays). Desktop autoplays with sound;
      mobile autoplays muted (policy) and this pulses to invite a tap. .muted swaps the waves for a slash. */
   #audio{display:none;align-items:center;justify-content:center;
@@ -180,6 +181,21 @@
        border:1px solid var(--border);border-radius:7px;padding:7px 14px;cursor:pointer;transition:background .15s;}
   #embedcard .erow button:hover{background:rgba(255,255,255,0.15);}
   #embedcard .erow #embedcopy{background:rgba(255,255,255,0.14);}
+
+  /* "load a new video?" confirmation — shown before replacing a clip that's already playing */
+  #confirmwrap{position:fixed;inset:0;z-index:7;align-items:center;justify-content:center;
+       background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
+  #confirmwrap:not([hidden]){display:flex;}
+  #confirmcard{width:min(380px,calc(100vw - 40px));background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border-strong);border-radius:14px;box-shadow:var(--shadow);padding:20px;}
+  #confirmcard .ctitle{font-size:14px;color:var(--text);letter-spacing:.02em;margin-bottom:8px;}
+  #confirmcard .cmsg{font-size:12.5px;color:var(--muted);letter-spacing:.02em;margin-bottom:16px;}
+  #confirmcard .crow{display:flex;gap:8px;justify-content:flex-end;}
+  #confirmcard .crow button{font-family:var(--mono);font-size:12px;color:var(--text);background:rgba(255,255,255,0.08);
+       border:1px solid var(--border);border-radius:7px;padding:8px 15px;cursor:pointer;transition:background .15s,opacity .15s;}
+  #confirmcard .crow button:hover{background:rgba(255,255,255,0.15);}
+  #confirmcard .crow #confirmyes{color:var(--bg);background:var(--text);border-color:var(--text);}
+  #confirmcard .crow #confirmyes:hover{opacity:.88;background:var(--text);}
 
   @media (max-width:560px){
     #config{left:18px;right:18px;width:auto;}
@@ -233,6 +249,11 @@
   <textarea id="embedcode" readonly spellcheck="false"></textarea>
   <div class="erow"><button id="embedcopy">copy</button><button id="embedclose">close</button></div>
 </div></div>
+<div id="confirmwrap" hidden><div id="confirmcard">
+  <div class="ctitle">load a new video?</div>
+  <div class="cmsg">this replaces the ascii video playing right now.</div>
+  <div class="crow"><button id="confirmno">cancel</button><button id="confirmyes">load new</button></div>
+</div></div>
 <div id="mcover"></div>
 <div id="mdbg"></div>
 <canvas id="sample" style="display:none"></canvas>
@@ -285,6 +306,10 @@ function setComputing(on) {
   document.getElementById("load").disabled = on;
   document.getElementById("url").disabled = on;
 }
+// Set true from submit until the FIRST ascii frame is actually painted (cleared in renderFrame). The
+// reveal — showing the ascii, hiding the loader, re-enabling the CTAs — waits for that first paint, not
+// merely the video 'playing' event (which fires a beat earlier, before anything is on screen).
+let firstPaintPending = false;
 
 // Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames.
 let recording = false, recFrames = [], baking = false;
@@ -311,7 +336,7 @@ const CONTROLS = {
   // Cap the render framerate (max 30). The video keeps playing at its own rate; lower = fewer DOM rebuilds.
   maxfps: { label: "max fps", section: "advanced", min: 5, max: 30, step: 1, default: 30, unit: "" },
   // Fade the audio up/down at each loop's start/end — smooth seam. Carried into baked embeds (bake header).
-  fade: { label: "fade audio", section: "advanced", type: "checkbox", default: false },
+  fade: { label: "fade audio", section: "advanced", type: "checkbox", default: true },
   // ── music reactive ───────────────────────────────────────────────────────
   // The audio drives resolution + colour + a brightness/contrast pulse each frame (Web Audio AnalyserNode +
   // an adaptive beat detector; see applyReactivity). OFF by default so main's default behaviour is byte-for-
@@ -710,6 +735,11 @@ function renderFrame(now, metadata) {
     lastRender = now;
     applyReactivity(now); // music mode: drive the DRIVEN controls from the audio before painting this frame
     const { d, b, dom } = paint();
+    if (firstPaintPending) { // the first ascii frame is now on screen -> reveal it, hide the loader, re-enable CTAs
+      firstPaintPending = false;
+      document.body.classList.add("playing");
+      setComputing(false); stopLoader();
+    }
     const total = d + b + dom;
     const vt = metadata ? metadata.mediaTime : video.currentTime; // rVFC gives the exact frame time
     const looped = vt < lastVt; // wrapped to start -> decode stall, skip this frame
@@ -753,6 +783,7 @@ scheduleFrame();
 //    often bot-blocks the resolver, so file/direct-url are the reliable paths (see CLAUDE.md Deployment).
 const MAX_SECONDS = 300; // deny anything longer than 5 minutes (both youtube + dropped files)
 function playSrc(src) {
+  firstPaintPending = true; // hold the reveal + CTA block until the first ascii frame actually paints
   video.onloadedmetadata = () => {
     if (isFinite(video.duration) && video.duration > MAX_SECONDS) {
       video.pause(); video.removeAttribute("src"); video.load(); // stop + release the source
@@ -770,7 +801,7 @@ function playSrc(src) {
 }
 
 // Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
-function showError(msg) { setComputing(false); stopLoader(); status.textContent = msg; }
+function showError(msg) { firstPaintPending = false; setComputing(false); stopLoader(); status.textContent = msg; }
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB cap on dropped files
 // What's currently playing, kept so the embed can be keyed deterministically (see startBake): a File is
@@ -802,6 +833,9 @@ let stepTimer = 0;
 
 function startLoader(isYouTube) {
   status.textContent = ""; // clear any prior error
+  document.body.classList.remove("playing"); // bring the loading screen back, even over a clip that's playing
+  screen.textContent = "";                    // clear the current ascii so only the loader shows
+  video.pause();                              // stop the current clip while the new one loads
   document.body.classList.add("loading");
   clearInterval(stepTimer);
   subEl.style.display = isYouTube ? "block" : "none";
@@ -873,9 +907,7 @@ function loadInput(text) {
 
 // Reveal the ASCII, hide the empty state, once frames actually start.
 video.addEventListener("playing", () => {
-  document.body.classList.add("playing");
-  setComputing(false); stopLoader(); // load is done once frames actually flow
-  syncAudio();
+  syncAudio(); // reflect muted state now; the reveal (playing class, stop loader, re-enable CTAs) waits for the first ascii paint
 });
 // A source can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
 video.addEventListener("error", () => { if (video.src) showError("this wouldn’t play — try a file or another link"); });
@@ -883,13 +915,23 @@ video.addEventListener("error", () => { if (video.src) showError("this wouldn’
 if (IS_MOBILE) {
   // Resume if the mobile browser suspends/stalls the stream. Guarded so it never fights the >5min reject
   // (which pauses a too-long video) or an in-progress bake. There's no keyboard pause on mobile.
-  const resume = () => { if (video.src && isFinite(video.duration) && video.duration <= MAX_SECONDS && !video.ended && !baking) video.play().catch(() => {}); };
+  const resume = () => { if (video.src && isFinite(video.duration) && video.duration <= MAX_SECONDS && !video.ended && !baking && !computing) video.play().catch(() => {}); };
   ["pause", "waiting", "stalled"].forEach(ev => video.addEventListener(ev, resume));
 }
 
 const urlInput = document.getElementById("url");
-document.getElementById("load").addEventListener("click", () => loadInput(urlInput.value));
-urlInput.addEventListener("keydown", e => { if (e.key === "Enter") loadInput(e.target.value); });
+// If a clip is already playing, confirm before replacing it. guardLoad defers the actual load until the
+// user accepts the "load a new video?" dialog; with nothing playing it loads straight away.
+const confirmWrap = document.getElementById("confirmwrap");
+let pendingLoad = null;
+function guardLoad(action) {
+  if (document.body.classList.contains("playing")) { pendingLoad = action; confirmWrap.hidden = false; }
+  else action();
+}
+document.getElementById("confirmyes").addEventListener("click", () => { confirmWrap.hidden = true; const a = pendingLoad; pendingLoad = null; if (a) a(); });
+document.getElementById("confirmno").addEventListener("click", () => { confirmWrap.hidden = true; pendingLoad = null; });
+document.getElementById("load").addEventListener("click", () => guardLoad(() => loadInput(urlInput.value)));
+urlInput.addEventListener("keydown", e => { if (e.key === "Enter") guardLoad(() => loadInput(e.target.value)); });
 // Own-mp4 path is drag-and-drop only (see the drop handler below) — no upload button by design.
 
 // --- baked embed: record one loop -> .asciiv (shared codec) -> presigned S3 upload -> iframe snippet ---
@@ -1022,7 +1064,8 @@ document.addEventListener("dragleave", e => { if (--dragDepth <= 0) { dragDepth 
 document.addEventListener("drop", e => {
   e.preventDefault();
   dragDepth = 0; document.body.classList.remove("dragging");
-  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  const f = e.dataTransfer.files[0];
+  if (f) guardLoad(() => loadFile(f)); // dropping over a playing clip also asks first
 });
 
 // Warn before closing once something's actually playing — leaving loses the ascii video. Only armed
