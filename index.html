@@ -393,7 +393,7 @@ let firstPaintPending = false;
 // Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames
 // AND its wall-clock time (relative to recStart) into recTimes — capture is maxfps/rVFC-throttled so frames
 // land at UNEVEN instants; storing the real times lets the embed map audio→frame correctly (see bake).
-let recording = false, recFrames = [], recTimes = [], recStart = 0, baking = false;
+let recording = false, recFrames = [], recTimes = [], recStart = 0, baking = false, recPausedMs = 0;
 
 // Every tunable lives here; `section` groups it in the panel (basic / advanced / music). Order matters —
 // entries are rendered top-to-bottom and a section header is emitted whenever `section` changes.
@@ -702,7 +702,7 @@ function paint() {
     if (shade) out += "</i>";
     if (r < rows - 1) out += "\n";
   }
-  if (rec) { recFrames.push(rec); recTimes.push(performance.now() - recStart); } // frame + its real capture time (ms from recStart)
+  if (rec) { recFrames.push(rec); recTimes.push(performance.now() - recStart - recPausedMs); } // frame + its real capture time (foreground ms from recStart; hidden spans excluded — see bake)
   const tDom = performance.now();
   // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
   if (shade) screen.innerHTML = out;
@@ -1091,7 +1091,23 @@ async function bakeInBackground(upload) {
       mr.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
     }
   } catch { /* captureStream/MediaRecorder unsupported -> silent embed */ }
-  recFrames = []; recTimes = [];
+  recFrames = []; recTimes = []; recPausedMs = 0;
+  // Capture is driven by requestVideoFrameCallback, which STOPS firing while the tab is hidden. Without this
+  // guard, switching tabs mid-bake captures no frames for that span while the wall clock + audio recorder run
+  // on — baking a multi-second FROZEN hold into `times` (that's the "freezes sometimes" bug). So while hidden,
+  // pause the video + audio recorder and freeze the elapsed/timestamp clock: the bake only accumulates
+  // continuous FOREGROUND time, keeping frames and audio in lockstep no matter how the user tab-switches.
+  let hiddenSince = 0;
+  const onVis = () => {
+    if (document.hidden) {
+      if (!hiddenSince) { hiddenSince = performance.now(); video.pause(); if (mr && mr.state === "recording") mr.pause(); }
+    } else if (hiddenSince) {
+      recPausedMs += performance.now() - hiddenSince; hiddenSince = 0;
+      if (mr && mr.state === "paused") mr.resume();
+      video.play().catch(() => {});
+    }
+  };
+  document.addEventListener("visibilitychange", onVis);
   try {
     if (video.paused) await video.play();
     if (mr) mr.start();
@@ -1102,7 +1118,7 @@ async function bakeInBackground(upload) {
     await new Promise(res => {
       const t0 = performance.now();
       const iv = setInterval(() => {
-        const el = (performance.now() - t0) / 1000;
+        const el = (performance.now() - t0 - recPausedMs - (hiddenSince ? performance.now() - hiddenSince : 0)) / 1000;
         setEmbedStat(`generating… ${fmt(el)} / ${fmt(dur)}`);
         if (el >= dur) { clearInterval(iv); res(); }
       }, 200);
@@ -1131,6 +1147,8 @@ async function bakeInBackground(upload) {
   } catch (e) {
     setEmbedStat("couldn’t finish generating — " + (e.message || "try again"));
   } finally {
+    document.removeEventListener("visibilitychange", onVis);
+    if (hiddenSince && mr && mr.state === "paused") mr.resume(); // don't leave the recorder wedged if we bailed while hidden
     recording = false; baking = false;
   }
 }
