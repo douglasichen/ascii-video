@@ -902,7 +902,10 @@ async function sha256hex(bytes) {
 // and bake in the background; and an identical source+look hashes to the same key, so it's never re-baked.
 async function embedHash() {
   const sig = JSON.stringify([currentSourceId, state.color, state.shading, state.detail,
-    state.saturation, state.contrast, state.brightness, state.invert, cols, rows]);
+    state.saturation, state.contrast, state.brightness, state.invert, cols, rows,
+    // fade + maxfps also change the baked artifact (fade rides the header; maxfps sets captured frame
+    // count/fps), so they MUST key it too — else changing only these re-hits the cache and serves a stale bake.
+    state.fade, state.maxfps]);
   const src = currentFile
     ? (await sha256hex(new Uint8Array(await currentFile.arrayBuffer()))) + sig
     : sig;
