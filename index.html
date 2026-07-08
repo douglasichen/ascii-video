@@ -177,6 +177,13 @@
   #embedwrap{position:fixed;inset:0;z-index:6;align-items:center;justify-content:center;
        background:rgba(8,9,10,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);}
   #embedwrap:not([hidden]){display:flex;}
+  /* Opaque cover shown ONLY while baking. The bake seeks the live <video> back to 0 and scrubs it in real
+     time to capture the clip from the start (there's one shared <video> — the embed is sampled from it), so
+     this hides that scrubbing behind a solid screen. z-index 5 keeps it UNDER the snippet card (z 6) so the
+     embed code stays visible + copyable while the bake runs behind it. */
+  #bakecover{position:fixed;inset:0;z-index:5;display:none;align-items:center;justify-content:center;background:var(--bg);}
+  body.baking #bakecover{display:flex;}
+  #bakecover .msg{font-family:var(--mono);font-size:13px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase;}
   #embedcard{width:min(560px,calc(100vw - 40px));background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border-strong);border-radius:14px;box-shadow:var(--shadow);padding:18px;}
   #embedcard .etitle{font-size:12px;color:var(--muted);letter-spacing:.03em;margin-bottom:10px;}
@@ -274,6 +281,7 @@
 </div>
 <div id="soundcue">🔊 click anywhere for sound</div>
 <div id="boundlbl">▢ embed capture frame</div>
+<div id="bakecover"><div class="msg">generating your embed…</div></div>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into your website!</div>
   <textarea id="embedcode" readonly spellcheck="false"></textarea>
@@ -1080,6 +1088,7 @@ async function startBake() {
 // shown, so its real-time cost is off the click path.
 async function bakeInBackground(upload) {
   baking = true;
+  document.body.classList.add("baking"); // opaque cover over the live player while we seek+scrub it to capture
   const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
   setEmbedStat(`generating… your embed goes live in about ${fmt(dur)}`);
   let mr = null; const audioChunks = [];
@@ -1169,6 +1178,7 @@ async function bakeInBackground(upload) {
     setEmbedStat("couldn’t finish generating — " + (e.message || "try again"));
   } finally {
     document.removeEventListener("visibilitychange", onVis);
+    document.body.classList.remove("baking");
     if (hiddenSince && mr && mr.state === "paused") mr.resume(); // don't leave the recorder wedged if we bailed while hidden
     recording = false; baking = false;
   }
