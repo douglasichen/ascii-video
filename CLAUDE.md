@@ -175,6 +175,34 @@ luminance → quantized level → ASCII character → tinted DOM text**.
 - **Debug (`d` key).** Toggles the `#fps` profiler line **and** `body.show-bounds`,
   a dashed outline around `#screen` marking exactly what the embed bakes.
 
+## Controls panel: sections + `base`
+
+`CONTROLS` entries carry a `section` (`basic` / `advanced` / `music`); the builder
+emits a full-width header row whenever the section changes. There are now two
+mirrors of the values: **`state`** (live, read each frame) and **`base`** (the
+user's resting values). `setControl` writes both. This exists for music mode.
+
+## Music reactivity (`react` toggle, off by default)
+
+Ported from `experiment/music-reactive`. A `<video> → MediaElementSource →
+AnalyserNode → destination` graph (`initAudio`, lazy on first use) taps the FFT
+without muting playback. `applyReactivity(now)` runs each render frame *before*
+`paint()` and, on a beat (energy-based detector on the ~43–215 Hz kick band,
+adaptive `mean + k·std`, 200 ms refractory), pumps an envelope that drives the
+**DRIVEN** keys (`brightness`, `contrast`, `color`, `detail`) — writing them into
+`state` from `base` + audio. Each target is independently tunable: `sensitivity`
+(beat threshold), `punch` (brightness/contrast flash), `colorReact` (blends
+`base.color` → an audio-driven hue via `mixHex`/`hslHex`), `resReact` (beat
+"zoom-punch" on the resolution grid). Key non-regression property: **off by
+default, and turning it off restores `state` to `base` exactly** — so main's
+default behaviour and the shipped look are unchanged. It stays fast because it
+only ever changes *which* single base colour `buildPalette()` ramps to (still ≤8
+colours/frame) and folds brightness/contrast into the existing `CONTRAST_LUT`;
+`detail` is an int and only re-grids on an actual change. Music parameter rows are
+hidden (`body.music-on`) until the toggle is on. *Known limitation:* once the
+graph is created, the embed bake's `captureStream()` audio can be silent while
+music is on (niche combo). See `experiments/music-reactive-notes.md`.
+
 ## Baked embeds (`save` button → `.asciiv` on S3)
 
 The **save** CTA (top-right, `#embed`) bakes the currently-playing clip into a
