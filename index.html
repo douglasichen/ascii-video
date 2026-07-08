@@ -130,6 +130,7 @@
   #empty{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;}
   #empty .ramp{color:var(--faint);font-size:26px;letter-spacing:.42em;padding-left:.42em;margin-bottom:20px;}
   #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
+  #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:9px;max-width:min(420px,calc(100vw - 40px));}
   body.playing #empty{display:none;}
 
   /* generate-embed button (only while a video plays) + the snippet modal */
@@ -187,7 +188,8 @@
 <pre id="screen"></pre>
 <div id="empty">
   <div class="ramp">.:-=+*#%@</div>
-  <div class="hint">paste a link, or drop an mp4, to watch it in ascii</div>
+  <div class="hint">paste a youtube link, or drop an mp4, to watch it in ascii</div>
+  <div class="note">heads up — a youtube link can take up to a minute; dropping an mp4 plays instantly</div>
 </div>
 <div id="bar">
   <button class="cfgtoggle" id="cfgtoggle" type="button" aria-label="toggle controls" aria-expanded="false" title="controls">
