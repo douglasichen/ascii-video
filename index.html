@@ -109,15 +109,16 @@
   input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--bg);transition:transform .15s;}
   input[type=checkbox]:checked::after{transform:translateX(13px);}
 
-  /* colour swatch */
-  input[type=color]{appearance:none;-webkit-appearance:none;width:100%;height:20px;border:1px solid var(--border);border-radius:6px;background:none;cursor:pointer;padding:0;}
+  /* colour cell: hex field on the left, a small rounded-square swatch on the right */
+  .ctrl .colorcell{display:flex;align-items:center;gap:8px;}
+  input[type=color]{appearance:none;-webkit-appearance:none;flex:none;width:26px;height:26px;border:1px solid var(--border-strong);border-radius:7px;background:none;cursor:pointer;padding:0;}
   input[type=color]::-webkit-color-swatch-wrapper{padding:2px;}
   input[type=color]::-webkit-color-swatch{border:none;border-radius:4px;}
   input[type=color]::-moz-color-swatch{border:none;border-radius:4px;}
 
-  /* editable hex field paired with the colour swatch (sits in the row's value cell) */
-  .ctrl input.hex{width:100%;min-width:62px;font-family:var(--mono);font-size:11px;color:var(--text);text-align:right;
-       background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;padding:3px 5px;outline:none;
+  /* editable hex field — fills the space left of the swatch inside the colour cell */
+  .ctrl input.hex{flex:1;min-width:0;font-family:var(--mono);font-size:11px;color:var(--text);
+       background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;padding:4px 7px;outline:none;
        font-variant-numeric:tabular-nums;}
   .ctrl input.hex:focus{border-color:var(--border-strong);}
 
@@ -337,15 +338,13 @@ for (const key in CONTROLS) {
   // the music *parameter* rows (not the on/off toggle) stay hidden until music is on — keeps the panel simple
   if (c.section === "music" && key !== "react") row.classList.add("music-param");
   let input;
-  if (c.type === "color") input = `<input type="color" id="ctrl-${key}" value="${c.default}">`;
+  // colour: hex field (left) + a small square swatch (right), both in the input cell — so the shared value
+  // column stays narrow (just the numeric readouts) and every slider runs nearly to its number.
+  if (c.type === "color") input = `<div class="colorcell"><input type="text" class="hex" id="hex-${key}" value="${c.default}" spellcheck="false" maxlength="7" aria-label="${c.label} hex"><input type="color" id="ctrl-${key}" value="${c.default}"></div>`;
   else if (c.type === "checkbox") input = `<input type="checkbox" id="ctrl-${key}" ${c.default ? "checked" : ""}>`;
   else input = `<input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">`;
-  // Always emit the value cell so every row's 4 cells line up in the shared grid (.ctrl is
-  // display:contents). Range -> a numeric readout; colour -> an editable hex field (type exact hex, kept in
-  // sync with the swatch); other -> empty. Reset is a subtle ↺ glyph.
-  const valCell = c.type === "color"
-    ? `<input type="text" class="hex" id="hex-${key}" value="${c.default}" spellcheck="false" maxlength="7" aria-label="${c.label} hex">`
-    : `<span class="val" id="val-${key}">${c.type ? "" : c.default + c.unit}</span>`;
+  // value cell: range -> numeric readout; checkbox/colour -> empty. Every row keeps 4 grid cells aligned.
+  const valCell = `<span class="val" id="val-${key}">${c.type ? "" : c.default + c.unit}</span>`;
   row.innerHTML = `
     <label>${c.label}</label>
     ${input}
