@@ -358,8 +358,10 @@ function refreshLoadBtn() {
 let firstPaintPending = false;
 let autoMute = false; // the on-open auto-load has no user gesture yet, so it must start muted
 
-// Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames.
-let recording = false, recFrames = [], baking = false;
+// Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames
+// AND its wall-clock time (relative to recStart) into recTimes — capture is maxfps/rVFC-throttled so frames
+// land at UNEVEN instants; storing the real times lets the embed map audio→frame correctly (see bake).
+let recording = false, recFrames = [], recTimes = [], recStart = 0, baking = false;
 
 // Every tunable lives here; `section` groups it in the panel (basic / advanced / music). Order matters —
 // entries are rendered top-to-bottom and a section header is emitted whenever `section` changes.
@@ -668,7 +670,7 @@ function paint() {
     if (shade) out += "</i>";
     if (r < rows - 1) out += "\n";
   }
-  if (rec) recFrames.push(rec); // one baked frame (matches exactly what's on screen this frame)
+  if (rec) { recFrames.push(rec); recTimes.push(performance.now() - recStart); } // frame + its real capture time (ms from recStart)
   const tDom = performance.now();
   // textContent skips the HTML parse + per-cell element create/destroy entirely (~20x cheaper).
   if (shade) screen.innerHTML = out;
@@ -1055,10 +1057,13 @@ async function bakeInBackground(upload) {
       mr.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
     }
   } catch { /* captureStream/MediaRecorder unsupported -> silent embed */ }
-  recFrames = [];
+  recFrames = []; recTimes = [];
   try {
     if (video.paused) await video.play();
     if (mr) mr.start();
+    // recStart is the origin frame timestamps are measured from — set it right at mr.start()/recording so it
+    // matches the audio recording's own t=0. Playback maps audioEl.currentTime through these times.
+    recStart = performance.now();
     recording = true;
     await new Promise(res => {
       const t0 = performance.now();
@@ -1075,10 +1080,13 @@ async function bakeInBackground(upload) {
     setEmbedStat("encoding…");
     const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
     const fps = Math.max(1, Math.round(recFrames.length / dur));
+    // times[] = each frame's real capture instant (ms from recStart); durationMs = the FULL recording span
+    // (the loop period), so the last frame holds until the loop wraps in lockstep with the ~dur-long audio.
+    const times = recTimes.map(t => Math.round(t));
     const header = { fps, cols, rows, colour: state.color, shading: state.shading, fade: state.fade,
-                     durationMs: Math.round(dur * 1000), audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
+                     durationMs: Math.round(dur * 1000), times, audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
     const bytes = await ASCIIV.encodeAsciiv(header, recFrames, audio);
-    recFrames = []; // free memory early
+    recFrames = []; recTimes = []; // free memory early
     setEmbedStat("uploading…");
     const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
     Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v));
