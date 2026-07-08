@@ -307,7 +307,21 @@ if (IS_MOBILE) {
 }
 // Audio toggle (round speaker button). Mirrors video.muted; a tap flips it and resumes playback if needed.
 function syncAudio() { audioBtn.classList.toggle("muted", video.muted); }
-audioBtn.addEventListener("click", () => { video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); syncAudio(); });
+let armedUnmute = false; // waiting to unmute on the first user gesture (auto-load starts muted per autoplay policy)
+audioBtn.addEventListener("click", () => { armedUnmute = false; video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); syncAudio(); });
+// Audio on by default: unmuted autoplay is blocked without a gesture, so the auto-load starts muted and we
+// unmute on the FIRST user interaction anywhere — a real gesture the policy accepts. Clicks on the speaker
+// button are ignored here (it manages mute itself); disarms once fired or once the user takes control.
+function firstGestureUnmute(e) {
+  if (!armedUnmute) return;
+  if (e && e.target && e.target.closest && e.target.closest("#audio")) return;
+  armedUnmute = false;
+  document.removeEventListener("pointerdown", firstGestureUnmute);
+  document.removeEventListener("keydown", firstGestureUnmute);
+  if (video.src && video.muted) { video.muted = false; video.play().catch(() => {}); syncAudio(); }
+}
+document.addEventListener("pointerdown", firstGestureUnmute);
+document.addEventListener("keydown", firstGestureUnmute);
 // Live mobile debug readout (add ?debug=1) so device-only issues can be reported precisely.
 if (new URLSearchParams(location.search).has("debug")) {
   const el = document.getElementById("mdbg"); el.style.display = "block";
@@ -1144,7 +1158,7 @@ document.addEventListener("keydown", e => {
 
 // Preload a default clip on open so the landing is never blank. The youtube resolve is cached server-side
 // (instant after the first visitor); autoplay must be muted (no gesture yet) — tap the speaker for sound.
-autoMute = true;
+autoMute = true; armedUnmute = true; // start muted (autoplay policy) and unmute on the first interaction
 loadInput("https://www.youtube.com/shorts/f7SeGmBIVlE");
 </script>
 </body></html>
