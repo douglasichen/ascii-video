@@ -158,6 +158,13 @@
   #audio.muted{animation:apulse 1.7s ease-in-out infinite;}
   @keyframes apulse{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0.22)}55%{box-shadow:0 0 0 7px rgba(255,255,255,0)}}
   body.playing #audio{display:flex;}
+  /* "click for sound" cue — shown only while we're silently muted awaiting the first gesture (toggled from
+     syncAudio). Sits just under the top-right actions row; on-theme monospace, muted, non-blocking. */
+  #soundcue{position:fixed;top:64px;right:18px;z-index:3;display:none;pointer-events:none;
+       font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--muted);
+       background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border:1px solid var(--border);border-radius:8px;padding:5px 9px;box-shadow:var(--shadow);
+       animation:apulse 1.7s ease-in-out infinite;}
   /* debug: outline the exact region the embed bakes (the ascii grid) so you can preview the embed frame */
   body.show-bounds #screen{outline:1px dashed rgba(50,205,50,0.85);outline-offset:6px;}
   #boundlbl{position:fixed;top:10px;right:14px;z-index:5;display:none;color:#32cd32;font-size:10px;letter-spacing:.05em;}
@@ -265,6 +272,7 @@
     save
   </button>
 </div>
+<div id="soundcue">🔊 click anywhere for sound</div>
 <div id="boundlbl">▢ embed capture frame</div>
 <div id="embedwrap" hidden><div id="embedcard">
   <div class="etitle">embed code — paste into your website!</div>
@@ -305,23 +313,48 @@ if (IS_MOBILE) {
   document.body.classList.add("is-mobile");
   try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* older iOS */ }
 }
-// Audio toggle (round speaker button). Mirrors video.muted; a tap flips it and resumes playback if needed.
-function syncAudio() { audioBtn.classList.toggle("muted", video.muted); }
-let armedUnmute = false; // waiting to unmute on the first user gesture (auto-load starts muted per autoplay policy)
-audioBtn.addEventListener("click", () => { armedUnmute = false; video.muted = !video.muted; if (!video.muted) video.play().catch(() => {}); syncAudio(); });
-// Audio on by default: unmuted autoplay is blocked without a gesture, so the auto-load starts muted and we
-// unmute on the FIRST user interaction anywhere — a real gesture the policy accepts. Clicks on the speaker
-// button are ignored here (it manages mute itself); disarms once fired or once the user takes control.
-function firstGestureUnmute(e) {
-  if (!armedUnmute) return;
-  if (e && e.target && e.target.closest && e.target.closest("#audio")) return;
-  armedUnmute = false;
-  document.removeEventListener("pointerdown", firstGestureUnmute);
-  document.removeEventListener("keydown", firstGestureUnmute);
-  if (video.src && video.muted) { video.muted = false; video.play().catch(() => {}); syncAudio(); }
+// Audio: play WITH sound by default, never force-mute on our own. Reality check (verified 2026 against
+// Chrome/Safari/Firefox autoplay docs): zero-gesture unmuted autoplay is NOT possible on a first visit —
+// every browser blocks it without either a user gesture, an installed PWA, or (Chrome desktop only) a high
+// Media Engagement Index from past visits. There is no honest hack around this; we don't pretend otherwise.
+// So: we ALWAYS try unmuted first. Returning/engaged visitors (MEI) get instant sound with zero clicks.
+// Everyone else's unmuted play() is rejected -> we fall back to muted so the video still plays, show the
+// "click for sound" cue, and unmute on the very first interaction anywhere. The only thing that keeps sound
+// off is the user explicitly hitting the speaker button (userMuted). Nothing else ever mutes.
+const soundcue = document.getElementById("soundcue");
+let userMuted = false;  // the user's explicit choice via the speaker button — the ONLY thing that silences us
+let activated = false;  // page has received a real user gesture (which lets the browser grant unmuted play)
+function syncAudio() {
+  audioBtn.classList.toggle("muted", video.muted);
+  // Cue shows only while we're silently muted awaiting a gesture — not when the user chose to mute.
+  soundcue.style.display = (video.muted && !userMuted && document.body.classList.contains("playing")) ? "block" : "none";
 }
-document.addEventListener("pointerdown", firstGestureUnmute);
-document.addEventListener("keydown", firstGestureUnmute);
+// Set audio to the desired state (sound unless the user muted). If the browser refuses unmuted autoplay,
+// downgrade to muted so playback still starts; a later gesture (or the 'playing' retry) brings sound in.
+function applyAudio() {
+  video.muted = userMuted;
+  syncAudio();
+  video.play().catch(() => {
+    if (!userMuted) { video.muted = true; syncAudio(); video.play().catch(() => {}); } // unmuted blocked -> muted fallback
+  });
+}
+// Speaker button = manual override, both directions. Records the explicit choice so new loads respect it.
+audioBtn.addEventListener("click", () => {
+  video.muted = !video.muted; userMuted = video.muted;
+  if (!video.muted) video.play().catch(() => {});
+  syncAudio();
+});
+// First real interaction anywhere unmutes (a gesture is what the autoplay policy accepts). Widest set of
+// user-activation events, capture phase so nothing can swallow it, first one wins then all are removed.
+// The speaker button manages its own mute, so ignore gestures on it here.
+const GESTURE_EVENTS = ["pointerdown", "pointerup", "click", "keydown", "touchstart", "touchend"];
+function onFirstGesture(e) {
+  if (e && e.target && e.target.closest && e.target.closest("#audio")) return;
+  activated = true;
+  GESTURE_EVENTS.forEach(ev => document.removeEventListener(ev, onFirstGesture, true));
+  if (!userMuted && video.muted) applyAudio(); // unmute now; if the clip isn't loaded yet, 'playing' retries
+}
+GESTURE_EVENTS.forEach(ev => document.addEventListener(ev, onFirstGesture, true));
 // Live mobile debug readout (add ?debug=1) so device-only issues can be reported precisely.
 if (new URLSearchParams(location.search).has("debug")) {
   const el = document.getElementById("mdbg"); el.style.display = "block";
@@ -356,7 +389,6 @@ function refreshLoadBtn() {
 // reveal — showing the ascii, hiding the loader, re-enabling the CTAs — waits for that first paint, not
 // merely the video 'playing' event (which fires a beat earlier, before anything is on screen).
 let firstPaintPending = false;
-let autoMute = false; // the on-open auto-load has no user gesture yet, so it must start muted
 
 // Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames
 // AND its wall-clock time (relative to recStart) into recTimes — capture is maxfps/rVFC-throttled so frames
@@ -857,15 +889,14 @@ function playSrc(src) {
     onMetadata();
   };
   video.src = src;
-  // Autoplay WITH sound: desktop plays unmuted. Mobile blocks unmuted autoplay when play() runs after an
-  // async resolve (outside the tap gesture), so it starts muted and the speaker button brings sound in.
-  video.muted = IS_MOBILE || autoMute; autoMute = false; // autoplay-on-open has no gesture -> muted; tap the speaker for sound
-  syncAudio();
-  video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
+  // Try WITH sound (unless the user explicitly muted). applyAudio falls back to muted if the browser blocks
+  // unmuted autoplay — and because it keys off userMuted (not a per-load flag), an already-unmuted session
+  // stays unmuted across new drops/links; only the speaker button ever mutes.
+  applyAudio();
 }
 
 // Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
-function showError(msg) { firstPaintPending = false; autoMute = false; setComputing(false); stopLoader(); status.textContent = msg; }
+function showError(msg) { firstPaintPending = false; setComputing(false); stopLoader(); status.textContent = msg; }
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB cap on dropped files
 // What's currently playing, kept so the embed can be keyed deterministically (see startBake): a File is
@@ -959,7 +990,10 @@ function loadInput(text) {
 
 // Reveal the ASCII, hide the empty state, once frames actually start.
 video.addEventListener("playing", () => {
-  syncAudio(); // reflect muted state now; the reveal (playing class, stop loader, re-enable CTAs) waits for the first ascii paint
+  // If the user already gestured while this clip was still resolving, its unmute never took (no src yet).
+  // Now that it's actually playing, retry — activation is in hand, so the unmuted play() will be granted.
+  if (activated && !userMuted && video.muted) applyAudio();
+  syncAudio(); // reflect muted state now; the reveal waits for the first ascii paint
 });
 // A source can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
 video.addEventListener("error", () => { if (video.src) showError("this wouldn’t play — try a file or another link"); });
@@ -1165,8 +1199,8 @@ document.addEventListener("keydown", e => {
 });
 
 // Preload a default clip on open so the landing is never blank. The youtube resolve is cached server-side
-// (instant after the first visitor); autoplay must be muted (no gesture yet) — tap the speaker for sound.
-autoMute = true; armedUnmute = true; // start muted (autoplay policy) and unmute on the first interaction
+// (instant after the first visitor). playSrc tries WITH sound; if the browser blocks unmuted autoplay it
+// falls back to muted and the first interaction anywhere brings sound in (see the audio block above).
 loadInput("https://www.youtube.com/shorts/f7SeGmBIVlE");
 </script>
 </body></html>
