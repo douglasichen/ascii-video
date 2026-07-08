@@ -21,11 +21,6 @@
      it never competes. This is also the pre-JS fallback colour, and the flat colour when shading is off. */
   #screen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;white-space:pre;line-height:1;color:#fff;}
 
-  /* default demo — a baked embed that autoplays (muted) as the landing background until the user loads
-     their own clip. pointer-events:none so drag-drop and clicks pass straight through to the app. */
-  #demo{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:0;display:none;pointer-events:none;background:var(--bg);}
-  body:not(.playing):not(.loading) #demo{display:block;}
-
   /* command bar — a prompt to paste a link */
   #bar{position:fixed;top:18px;left:18px;z-index:2;display:flex;align-items:center;
        width:min(440px,calc(100vw - 36px));height:44px;padding:0 6px 0 8px;
@@ -133,12 +128,10 @@
   #fps{position:fixed;bottom:16px;left:68px;z-index:2;color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.02em;cursor:pointer;display:none;}
 
   /* empty state — built from the renderer's own character ramp; hidden once a video plays */
-  #empty{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1;text-align:center;pointer-events:none;
-       background:rgba(8,9,10,0.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
-       border:1px solid var(--border);border-radius:14px;padding:12px 20px;max-width:min(520px,calc(100vw - 32px));}
-  #empty .brand{color:var(--text);font-size:15px;letter-spacing:.34em;padding-left:.34em;margin-bottom:8px;opacity:.95;}
-  #empty .hint{color:var(--muted);font-size:12.5px;letter-spacing:.01em;}
-  #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:7px;}
+  #empty{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;}
+  #empty .brand{color:var(--text);font-size:18px;letter-spacing:.34em;padding-left:.34em;margin-bottom:16px;opacity:.95;}
+  #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
+  #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:9px;max-width:min(420px,calc(100vw - 40px));}
   body.playing #empty{display:none;}
 
   /* generate-embed button (only while a video plays) + the snippet modal */
@@ -235,7 +228,6 @@
 </style></head>
 <body>
 <pre id="screen"></pre>
-<iframe id="demo" src="/embed.html?id=23e3bb6ff958f812e31df04358e6d8edc539e1f51e30bb0081115c351581347b.asciiv&muted=1" allow="autoplay" title="demo" scrolling="no" tabindex="-1"></iframe>
 <div id="empty">
   <div class="brand">asciify</div>
   <div class="hint">paste a youtube link, or drop an mp4, to make your own</div>
@@ -322,7 +314,6 @@ if (new URLSearchParams(location.search).has("debug")) {
     `mob=${IS_MOBILE} muted=${video.muted} paused=${video.paused} t=${(video.currentTime||0).toFixed(1)} rs=${video.readyState} playing=${document.body.classList.contains("playing")}`; }, 300);
 }
 const status = document.getElementById("status");
-const demoFrame = document.getElementById("demo"); // landing-page default clip (a baked embed in an iframe)
 const canvas = document.getElementById("sample");
 const bar = document.getElementById("bar");
 const fpsEl = document.getElementById("fps");
@@ -346,6 +337,7 @@ function setComputing(on) {
 // reveal — showing the ascii, hiding the loader, re-enabling the CTAs — waits for that first paint, not
 // merely the video 'playing' event (which fires a beat earlier, before anything is on screen).
 let firstPaintPending = false;
+let autoMute = false; // the on-open auto-load has no user gesture yet, so it must start muted
 
 // Baked-embed capture state: while `recording`, paint() pushes each frame's char-indices into recFrames.
 let recording = false, recFrames = [], baking = false;
@@ -844,13 +836,13 @@ function playSrc(src) {
   video.src = src;
   // Autoplay WITH sound: desktop plays unmuted. Mobile blocks unmuted autoplay when play() runs after an
   // async resolve (outside the tap gesture), so it starts muted and the speaker button brings sound in.
-  video.muted = IS_MOBILE;
+  video.muted = IS_MOBILE || autoMute; autoMute = false; // autoplay-on-open has no gesture -> muted; tap the speaker for sound
   syncAudio();
   video.play().catch(() => {}); // muted autoplay is fine; ignore gesture-required rejections
 }
 
 // Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
-function showError(msg) { firstPaintPending = false; setComputing(false); stopLoader(); status.textContent = msg; }
+function showError(msg) { firstPaintPending = false; autoMute = false; setComputing(false); stopLoader(); status.textContent = msg; }
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB cap on dropped files
 // What's currently playing, kept so the embed can be keyed deterministically (see startBake): a File is
@@ -880,7 +872,6 @@ function startLoader(isYouTube) {
   document.body.classList.remove("playing"); // bring the loading screen back, even over a clip that's playing
   screen.textContent = "";                    // clear the current ascii so only the loader shows
   video.pause();                              // stop the current clip while the new one loads
-  if (demoFrame.src.indexOf("embed.html") !== -1) demoFrame.src = "about:blank"; // tear down the landing demo
   document.body.classList.add("loading");
   subEl.style.display = isYouTube ? "block" : "none";
   msgEl.textContent = isYouTube ? "downloading video…" : "rendering ascii…"; // static, no cycling
@@ -1141,5 +1132,10 @@ document.addEventListener("keydown", e => {
   if (e.key === "d") { DEBUG = !DEBUG; fpsEl.style.display = DEBUG ? "block" : "none"; document.body.classList.toggle("show-bounds", DEBUG); return; }
   if (e.code === "Space" && video.src) { e.preventDefault(); video.paused ? video.play() : video.pause(); }
 });
+
+// Preload a default clip on open so the landing is never blank. The youtube resolve is cached server-side
+// (instant after the first visitor); autoplay must be muted (no gesture yet) — tap the speaker for sound.
+autoMute = true;
+loadInput("https://www.youtube.com/shorts/f7SeGmBIVlE");
 </script>
 </body></html>
