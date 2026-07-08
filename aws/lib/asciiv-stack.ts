@@ -38,11 +38,22 @@ export class AsciivStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
+    // Separate PRIVATE bucket for user feedback. Written server-side by /api/feedback; never public-read,
+    // never fetched by the browser. RETAIN so teardown doesn't discard feedback; kept a year then expired.
+    const feedback = new s3.Bucket(this, "FeedbackBucket", {
+      bucketName: `asciify-feedback-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{ expiration: cdk.Duration.days(365) }],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const writer = new iam.User(this, "Writer", { userName: "asciiv-writer" });
-    bucket.grantPut(writer); // s3:PutObject on this bucket only
+    bucket.grantPut(writer);   // s3:PutObject on the clips bucket
+    feedback.grantPut(writer); // ...and on the feedback bucket (same key drives both functions)
     const key = new iam.AccessKey(this, "WriterKey", { user: writer });
 
     new cdk.CfnOutput(this, "BucketName", { value: bucket.bucketName });
+    new cdk.CfnOutput(this, "FeedbackBucketName", { value: feedback.bucketName });
     new cdk.CfnOutput(this, "Region", { value: this.region });
     new cdk.CfnOutput(this, "AccessKeyId", { value: key.accessKeyId });
     // Secret is emitted so we can lift it into Vercel env once; treat it as sensitive.
