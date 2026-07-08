@@ -15,6 +15,7 @@ here — the size cap above + the 30-day lifecycle bound *cost*, which is the ac
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
 import time
 import urllib.parse
 import uuid
@@ -25,7 +26,10 @@ from botocore.config import Config
 MAX_BYTES = 25 * 1024 * 1024  # 25 MB per baked clip
 
 
-def presign():
+def presign(content_hash=None):
+    """Presign an upload. If content_hash (a 64-char hex from the client) is given, the object key is
+    deterministic (<hash>.asciiv) so identical source+settings always map to the same clip: a HIT returns
+    {cached:true} and skips the upload entirely; a MISS presigns that exact key. No hash -> a random key."""
     bucket = os.environ["ASCIIV_BUCKET"]
     region = os.environ.get("ASCIIV_REGION", "us-east-1")
     s3 = boto3.client(
@@ -34,7 +38,16 @@ def presign():
         aws_secret_access_key=os.environ["ASCIIV_SECRET"],
         config=Config(signature_version="s3v4"),
     )
-    key = f"{int(time.time() * 1000)}-{uuid.uuid4().hex}.asciiv"
+    if content_hash:
+        key = f"{content_hash}.asciiv"
+        get_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+        try:  # already baked before? then the client can skip the whole real-time bake+upload.
+            s3.head_object(Bucket=bucket, Key=key)
+            return {"cached": True, "key": key, "getUrl": get_url}
+        except Exception:
+            pass  # miss (or no GetObject perm) -> presign a fresh upload for this deterministic key
+    else:
+        key = f"{int(time.time() * 1000)}-{uuid.uuid4().hex}.asciiv"
     post = s3.generate_presigned_post(
         Bucket=bucket, Key=key,
         Fields={"Content-Type": "application/octet-stream"},
@@ -65,8 +78,17 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
     def do_POST(self):
         if not same_origin(self.headers):
             return self._json(403, {"error": "cross-origin request refused"})
+        content_hash = None
+        try:  # optional JSON body {"hash": "<64 hex>"} — keys the clip for instant-snippet + caching
+            n = int(self.headers.get("Content-Length") or 0)
+            if n:
+                h = (json.loads(self.rfile.read(n) or b"{}").get("hash") or "").lower()
+                if re.fullmatch(r"[a-f0-9]{64}", h):
+                    content_hash = h
+        except Exception:
+            content_hash = None
         try:
-            payload = presign()
+            payload = presign(content_hash)
         except Exception as e:
             return self._json(500, {"error": str(e)[-300:]})
         return self._json(200, payload)

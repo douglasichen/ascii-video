@@ -87,9 +87,12 @@ luminance → quantized level → ASCII character → tinted DOM text**.
   static CSS class (`.k123{color:#rrggbb}`, built once in a `<style>`), so a cell
   emits `<i class=k123>` — same short class-based markup as the gray levels, not
   inline styles. `saturation`=0 uses the untouched 8-level gray path (byte-identical
-  to before, asserted in `bench/color-check.js`); >0 mixes each channel toward the
-  source colour by `sat/100` then snaps to the cube, and overrides the base-colour
-  tint (you're showing the video's own colour). Only active with shading on.
+  to before, asserted in `bench/color-check.js`); >0 mixes each channel from the
+  **base-colour-tinted gray** toward the source colour by `sat/100`, then snaps to
+  the cube. Base colour and saturation **combine** (not mutually exclusive): at any
+  saturation the chosen colour still tints the low end, and the mix rides up toward
+  the video's own colour as saturation increases (base white = neutral, i.e. the old
+  gray→video behaviour). Only active with shading on.
 - **Build assembly: one cons-string, not an array + join.** `paint()` grows the
   whole frame's markup with `out += …` rather than pushing per-cell parts into an
   array and `join()`-ing. V8 builds it as a rope and flattens once at assignment,
@@ -132,18 +135,24 @@ luminance → quantized level → ASCII character → tinted DOM text**.
   is done instead via `position:fixed; top:50%; left:50%;
   transform:translate(-50%,-50%)`, which doesn't touch the `<pre>`'s normal
   inline formatting context.
-- The **detail** slider is intentionally a 1–8 scale, not a raw pixel
+- The **detail** slider is intentionally a 1–9 scale, not a raw pixel
   size. It used to be a font-px control, but smaller-px-means-more-detail
   is backwards from intuition; `fontPx = 22 - detail*2` converts the
-  friendly 1–8 scale to the internal font size (1 = chunky/20px, 8 =
-  fine/6px). Capped at 8 (default 6) on purpose: finer than that the cell
+  friendly 1–9 scale to the internal font size (1 = chunky/20px, 9 =
+  fine/4px). Default 6: finer only helps up to a point, past which the cell
   count explodes span count faster than it adds usable detail.
-- All tunable parameters (`detail`, `contrast`, `turbo`, `color`) live in one
+- **`maxfps` slider (default/max 30).** Caps how often the ascii is rebuilt:
+  the render loop only repaints when `now - lastRender >= 1000/maxfps -
+  FRAME_JITTER`. The video keeps playing at its own rate; lowering this just
+  skips rebuilds, so it's the throttle for weak hardware / huge grids (fewer
+  DOM rebuilds = less GC). (Replaced the old fixed ~60fps `MIN_FRAME_MS` cap.)
+- All tunable parameters (`detail`, `contrast`, `color`, `maxfps`, …) live in one
   `CONTROLS` object that drives both the generated control UI and the `state`
   object read each frame — add a new tunable parameter there rather than wiring
   up ad hoc controls. Entries are range sliders by default; `type: "color"`
-  renders an `<input type=color>` instead (and its `input` value is kept as the
-  hex string, not coerced to a Number).
+  renders an `<input type=color>` **plus an editable hex field** in the row's
+  value cell (type an exact `#rrggbb`; the two stay in sync), and its value is
+  kept as the hex string, not coerced to a Number.
 - The frame render lives in `paint()` (draw→build→dom), split out of the rVFC
   loop so it can be called on demand. `setControl()` calls `paint()` after every
   control change so adjustments preview immediately **even while paused** — the
@@ -154,6 +163,39 @@ luminance → quantized level → ASCII character → tinted DOM text**.
   synchronously inside the Load button's click handler (a user gesture);
   moving it into an async continuation after a `fetch()` await can break
   autoplay in some browsers.
+- **Audio: autoplay + loop + a speaker toggle (`#audio`).** Desktop autoplays
+  unmuted; mobile blocks unmuted autoplay after an async resolve, so `playSrc`
+  sets `video.muted = IS_MOBILE` and the round `#audio` button (pulses while
+  muted) brings sound in on a tap. `syncAudio()` mirrors `video.muted` onto the
+  button. (Replaced the old mobile-only "tap for sound" pill.)
+- **Concurrency guard.** `computing` (with `setComputing`) disables the load
+  button + url field while a video/link is resolving or loading (set on
+  submit, cleared on the `playing` event or an error), and `loadFile`/
+  `loadInput` bail early if it's set — so a second submit can't race the first.
+- **Debug (`d` key).** Toggles the `#fps` profiler line **and** `body.show-bounds`,
+  a dashed outline around `#screen` marking exactly what the embed bakes.
+
+## Baked embeds (`save` button → `.asciiv` on S3)
+
+The **save** CTA (top-right, `#embed`) bakes the currently-playing clip into a
+self-contained ascii embed. Key idea: the embed's S3 key is a **content hash**
+known *before* baking — `embedHash()` = SHA-256 of the source (a file's bytes,
+or the youtube id / direct url) **plus the exact render settings**. That buys two
+things at once:
+
+- **Instant snippet.** Baking records one full loop in real time (unavoidably
+  slow — MediaRecorder audio is real-time), so we show the `<iframe>` snippet
+  *immediately* on click and bake+upload in the **background**. `embed.html`
+  treats a 404/403 as "not baked yet" → shows *"ascii video will be here soon!"*
+  and re-polls, so a snippet pasted before the bake finishes lights up on its own.
+- **Caching / dedup.** Same source + same look → same key. `POST /api/save`
+  with `{hash}` `head_object`s it: a HIT returns `{cached:true}` and the client
+  skips the whole bake+upload; a MISS presigns *that deterministic key* (no hash
+  → a random key, old behaviour). This is the "cache the uploaded file by content
+  hash" path — it also naturally dedups identical embeds in the bucket.
+
+`api/save.py` validates the hash is 64 hex before trusting it as a key.
+Progress shows in the modal's `#embedstat`, not by blocking the button.
 
 ## Deployment (Vercel)
 

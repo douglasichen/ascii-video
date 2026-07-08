@@ -75,7 +75,7 @@ const loadEl = document.getElementById("load");
 const errEl = document.getElementById("err");
 const tap = document.getElementById("tap");
 const audioEl = document.getElementById("audio");
-let frames = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0;
+let frames = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0, fadeOn = false;
 
 // Real monospace glyph advance (as a fraction of font-size), measured once from the actual rendered font
 // so the grid fills to the constraining edge exactly rather than assuming a magic 0.6 that varies by font.
@@ -111,6 +111,11 @@ function loop() {
   // audio clock when it's actually playing past 0 (A/V sync); wall clock otherwise (blocked/buffering/muted/none)
   const at = audioEl.currentTime;
   const t = (audioEl.src && !audioEl.paused && at > 0) ? at : (performance.now() - clockBase) / 1000;
+  if (fadeOn && audioEl.src && isFinite(audioEl.duration) && audioEl.duration > 0) {
+    const d = audioEl.duration, f = Math.min(1.5, d / 3); // fade window (shrinks for short clips)
+    let v = 1; if (at < f) v = at / f; else if (at > d - f) v = (d - at) / f;
+    audioEl.volume = v < 0 ? 0 : v > 1 ? 1 : v;
+  }
   draw(Math.floor(t * fps));
   raf = requestAnimationFrame(loop);
 }
@@ -148,12 +153,14 @@ async function load() {
   if (!id) return showError();
   let dec;
   try {
-    const buf = new Uint8Array(await fetch(S3_BASE + id).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }));
-    dec = await ASCIIV.decodeAsciiv(buf);
+    const r = await fetch(S3_BASE + id);
+    if (r.status === 404 || r.status === 403) return comingSoon(); // not baked yet -> placeholder, keep polling
+    if (!r.ok) throw 0;
+    dec = await ASCIIV.decodeAsciiv(new Uint8Array(await r.arrayBuffer()));
   } catch { return showError(); }
 
   const h = dec.header;
-  frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading;
+  frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading; fadeOn = !!h.fade;
   document.head.appendChild(document.createElement("style")).textContent = ASCIIV.buildPaletteCSS(h.colour);
   screen.style.color = h.colour;
   loadEl.style.display = "none";
@@ -170,6 +177,15 @@ async function load() {
 function showError() {
   loadEl.style.display = "none";
   errEl.style.display = "flex";
+}
+// The snippet is handed out the instant "save" is clicked — before the background bake finishes uploading.
+// Until the clip lands, show a friendly placeholder and re-check every few seconds so it appears on its own.
+function comingSoon() {
+  loadEl.style.display = "";
+  errEl.style.display = "none";
+  const cap = loadEl.querySelector(".cap");
+  if (cap) cap.textContent = "ascii video will be here soon!";
+  setTimeout(load, 5000);
 }
 load();
 </script>
