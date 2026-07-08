@@ -1110,6 +1110,23 @@ async function bakeInBackground(upload) {
   document.addEventListener("visibilitychange", onVis);
   try {
     if (video.paused) await video.play();
+    // Seek to content t=0 BEFORE audio + frame capture start, so the embed's frame 0 is the real start of
+    // the clip. Without this the bake records "from wherever the video is now" (playhead C): frame 0 =
+    // mid-clip, the true beginning lands at the tail of the loop, and a viewer entering the iframe starts
+    // partway through — the "beginning missing" bug. Both the audio recorder (captureStream) and frames must
+    // begin here and stay in lockstep, so we seek+settle before mr.start()/recStart. Await `seeked` (not just
+    // set currentTime) so the first captured frames are real start-of-clip, not stale/blank mid-seek. Timeout
+    // fallback so a browser that never fires `seeked` can't hang the bake. Skip when already at/near 0 or the
+    // duration isn't seekable (live stream). The live player just continues from 0 afterward — it's looping.
+    if (isFinite(video.duration) && video.currentTime > 0.05) {
+      await new Promise(res => {
+        let done = false;
+        const finish = () => { if (done) return; done = true; video.removeEventListener("seeked", finish); res(); };
+        video.addEventListener("seeked", finish);
+        video.currentTime = 0;
+        setTimeout(finish, 500);
+      });
+    }
     if (mr) mr.start();
     // recStart is the origin frame timestamps are measured from — set it right at mr.start()/recording so it
     // matches the audio recording's own t=0. Playback maps audioEl.currentTime through these times.
