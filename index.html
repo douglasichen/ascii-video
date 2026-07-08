@@ -1114,6 +1114,10 @@ async function bakeInBackground(upload) {
     // recStart is the origin frame timestamps are measured from — set it right at mr.start()/recording so it
     // matches the audio recording's own t=0. Playback maps audioEl.currentTime through these times.
     recStart = performance.now();
+    // If the tab is ALREADY hidden the instant recording starts (e.g. switched away during the /api/save
+    // fetch, before onVis was even attached — no transition fires), seed the hidden state by hand so that
+    // opening span is still excluded and rVFC-starved frames don't bake a gap.
+    if (document.hidden) { hiddenSince = recStart; if (mr && mr.state === "recording") mr.pause(); }
     recording = true;
     await new Promise(res => {
       const t0 = performance.now();
