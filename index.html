@@ -68,7 +68,7 @@
   /* control panel — a quiet instrument. Sits directly under the input bar in the same top-left column
      (matched width) so the two read as one stack, not opposite corners. .ctrl uses display:contents so
      every row's cells share one grid. */
-  #config{position:fixed;top:62px;left:18px;z-index:2;display:none;grid-template-columns:auto 1fr auto auto;
+  #config{position:fixed;top:62px;left:18px;z-index:2;display:none;grid-template-columns:96px 1fr auto auto;
        gap:12px 12px;align-items:center;width:min(440px,calc(100vw - 36px));padding:15px 16px;
        background:var(--surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
        border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);}
@@ -79,7 +79,7 @@
   #config .section:first-child{margin-top:0;padding-top:0;border-top:none;}
   /* music parameter rows are hidden until the music toggle is on (keeps the panel uncluttered) */
   body:not(.music-on) #config .ctrl.music-param{display:none;}
-  .ctrl label{font-size:11px;letter-spacing:.02em;color:var(--muted);white-space:nowrap;}
+  .ctrl label{font-size:11px;letter-spacing:.02em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .ctrl .val{font-size:11px;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;min-width:36px;}
   .ctrl .reset{font-family:var(--mono);font-size:13px;line-height:1;color:var(--faint);background:none;border:none;cursor:pointer;padding:2px 0;transition:color .15s,transform .2s;}
   .ctrl .reset:hover{color:var(--text);transform:rotate(-90deg);}
@@ -311,10 +311,10 @@ const CONTROLS = {
   // byte unchanged. `base` holds the user's resting slider values; the audio swings around them, and turning
   // music off restores `base` exactly. Each target has its own amount so it's independently tunable.
   react: { label: "music reactive", section: "music", type: "checkbox", default: false },
-  sensitivity: { label: "beat sensitivity", section: "music", min: 0, max: 100, step: 1, default: 55, unit: "%" },
-  punch: { label: "punch (bright/contrast)", section: "music", min: 0, max: 100, step: 1, default: 60, unit: "%" },
+  sensitivity: { label: "sensitivity", section: "music", min: 0, max: 100, step: 1, default: 55, unit: "%" },
+  punch: { label: "punch", section: "music", min: 0, max: 100, step: 1, default: 60, unit: "%" },
   colorReact: { label: "colour react", section: "music", min: 0, max: 100, step: 1, default: 70, unit: "%" },
-  resReact: { label: "resolution react", section: "music", min: 0, max: 100, step: 1, default: 50, unit: "%" },
+  resReact: { label: "res react", section: "music", min: 0, max: 100, step: 1, default: 50, unit: "%" },
 };
 // `state` = live values read each frame; `base` = the user's resting values (music mode modulates the
 // DRIVEN keys in `state` around `base`). setControl writes both; applyReactivity overwrites state's DRIVEN.
