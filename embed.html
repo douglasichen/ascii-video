@@ -136,8 +136,26 @@ function offerSound() {
   document.addEventListener("keydown", enableSound, { once: true });
 }
 
+// Sound control. FORCE_MUTE (?muted=1) keeps it silent with no tap pill (used by the landing demo).
+// setMuted is the single flip point and notifies the embedding page so it can sync its own button UI.
+const FORCE_MUTE = new URLSearchParams(location.search).has("muted");
+function setMuted(m) {
+  audioEl.muted = m;
+  if (!m) audioEl.play().catch(() => {});
+  try { parent.postMessage({ type: "asciify:muted", muted: audioEl.muted }, "*"); } catch {}
+}
+// Embedders can wire their OWN mute button/event via postMessage to the iframe:
+//   iframe.contentWindow.postMessage("asciify:toggle", "*")   // also "asciify:mute" / "asciify:unmute"
+// and listen for { type:"asciify:muted", muted } messages back to keep their button in sync.
+window.addEventListener("message", (e) => {
+  const cmd = typeof e.data === "string" ? e.data : (e.data && e.data.type);
+  if (cmd === "asciify:mute") setMuted(true);
+  else if (cmd === "asciify:unmute") setMuted(false);
+  else if (cmd === "asciify:toggle") setMuted(!audioEl.muted);
+});
 function startAudio() {
   audioEl.loop = true;
+  if (FORCE_MUTE) { setMuted(true); return; } // ?muted=1 → stay muted, no tap pill (landing demo / silent embeds)
   // 1) try unmuted straight away. 2) if the host blocks it, fall back to MUTED autoplay so the clip is at
   // least alive and A/V-synced, and surface a tasteful tap to bring sound in (also unmutes on any click/key).
   audioEl.muted = false;

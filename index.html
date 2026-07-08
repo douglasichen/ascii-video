@@ -21,6 +21,11 @@
      it never competes. This is also the pre-JS fallback colour, and the flat colour when shading is off. */
   #screen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);margin:0;white-space:pre;line-height:1;color:#fff;}
 
+  /* default demo — a baked embed that autoplays (muted) as the landing background until the user loads
+     their own clip. pointer-events:none so drag-drop and clicks pass straight through to the app. */
+  #demo{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:0;display:none;pointer-events:none;background:var(--bg);}
+  body:not(.playing):not(.loading) #demo{display:block;}
+
   /* command bar — a prompt to paste a link */
   #bar{position:fixed;top:18px;left:18px;z-index:2;display:flex;align-items:center;
        width:min(440px,calc(100vw - 36px));height:44px;padding:0 6px 0 8px;
@@ -128,11 +133,12 @@
   #fps{position:fixed;bottom:16px;left:68px;z-index:2;color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.02em;cursor:pointer;display:none;}
 
   /* empty state — built from the renderer's own character ramp; hidden once a video plays */
-  #empty{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;}
-  #empty .brand{color:var(--text);font-size:16px;letter-spacing:.34em;padding-left:.34em;margin-bottom:18px;opacity:.92;}
-  #empty .ramp{color:var(--faint);font-size:26px;letter-spacing:.42em;padding-left:.42em;margin-bottom:20px;}
-  #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
-  #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:9px;max-width:min(420px,calc(100vw - 40px));}
+  #empty{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:1;text-align:center;pointer-events:none;
+       background:rgba(8,9,10,0.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+       border:1px solid var(--border);border-radius:14px;padding:12px 20px;max-width:min(520px,calc(100vw - 32px));}
+  #empty .brand{color:var(--text);font-size:15px;letter-spacing:.34em;padding-left:.34em;margin-bottom:8px;opacity:.95;}
+  #empty .hint{color:var(--muted);font-size:12.5px;letter-spacing:.01em;}
+  #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:7px;}
   body.playing #empty{display:none;}
 
   /* generate-embed button (only while a video plays) + the snippet modal */
@@ -206,10 +212,10 @@
 </style></head>
 <body>
 <pre id="screen"></pre>
+<iframe id="demo" src="/embed.html?id=23e3bb6ff958f812e31df04358e6d8edc539e1f51e30bb0081115c351581347b.asciiv&muted=1" allow="autoplay" title="demo" scrolling="no" tabindex="-1"></iframe>
 <div id="empty">
   <div class="brand">asciify</div>
-  <div class="ramp">.:-=+*#%@</div>
-  <div class="hint">paste a youtube link, or drop an mp4, to watch it in ascii</div>
+  <div class="hint">paste a youtube link, or drop an mp4, to make your own</div>
   <div class="note">heads up — a youtube link can take up to a minute; dropping an mp4 plays instantly</div>
 </div>
 <div id="bar">
@@ -287,6 +293,7 @@ if (new URLSearchParams(location.search).has("debug")) {
     `mob=${IS_MOBILE} muted=${video.muted} paused=${video.paused} t=${(video.currentTime||0).toFixed(1)} rs=${video.readyState} playing=${document.body.classList.contains("playing")}`; }, 300);
 }
 const status = document.getElementById("status");
+const demoFrame = document.getElementById("demo"); // landing-page default clip (a baked embed in an iframe)
 const canvas = document.getElementById("sample");
 const bar = document.getElementById("bar");
 const fpsEl = document.getElementById("fps");
@@ -836,6 +843,7 @@ function startLoader(isYouTube) {
   document.body.classList.remove("playing"); // bring the loading screen back, even over a clip that's playing
   screen.textContent = "";                    // clear the current ascii so only the loader shows
   video.pause();                              // stop the current clip while the new one loads
+  if (demoFrame.src.indexOf("embed.html") !== -1) demoFrame.src = "about:blank"; // tear down the landing demo
   document.body.classList.add("loading");
   clearInterval(stepTimer);
   subEl.style.display = isYouTube ? "block" : "none";
