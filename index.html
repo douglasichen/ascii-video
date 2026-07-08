@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>ascii · video in text</title>
+<html><head><meta charset="utf-8"><title>asciify — watch any video in ascii</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{
@@ -129,6 +129,7 @@
 
   /* empty state — built from the renderer's own character ramp; hidden once a video plays */
   #empty{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;text-align:center;pointer-events:none;}
+  #empty .brand{color:var(--text);font-size:16px;letter-spacing:.34em;padding-left:.34em;margin-bottom:18px;opacity:.92;}
   #empty .ramp{color:var(--faint);font-size:26px;letter-spacing:.42em;padding-left:.42em;margin-bottom:20px;}
   #empty .hint{color:var(--muted);font-size:13px;letter-spacing:.01em;}
   #empty .note{color:var(--faint);font-size:11px;letter-spacing:.02em;margin-top:9px;max-width:min(420px,calc(100vw - 40px));}
@@ -190,6 +191,7 @@
 <body>
 <pre id="screen"></pre>
 <div id="empty">
+  <div class="brand">asciify</div>
   <div class="ramp">.:-=+*#%@</div>
   <div class="hint">paste a youtube link, or drop an mp4, to watch it in ascii</div>
   <div class="note">heads up — a youtube link can take up to a minute; dropping an mp4 plays instantly</div>

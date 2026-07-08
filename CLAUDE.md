@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A YouTube-link-to-live-ASCII-art video player, plus one older standalone
-batch-conversion tool. Two separate, unrelated code paths — don't assume
-they share logic:
+**asciify** (asciify.xyz) — a YouTube-link-(or dropped-mp4)-to-live-ASCII-art
+video player, plus one older standalone batch-conversion tool. Two separate,
+unrelated code paths — don't assume they share logic:
+
+(Note: "ascii-video" still appears as infrastructure identifiers — the git repo
+history, the S3 bucket `ascii-video-clips`, the `aws/` CDK package — those are
+NOT renamed, since the bucket name is baked into every already-published embed.)
 
 - **`index.html` + `api/resolve.py`** (deploys to Vercel) — the live player.
   Paste a YouTube URL, it plays in the browser as animated ASCII text with
