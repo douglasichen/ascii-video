@@ -8,7 +8,7 @@ import { video, screen, status, urlInput, loadBtn, loaderMsg, loaderSub, IS_MOBI
 import { rt } from "./state.js";
 import { computeGrid } from "./render.js";
 import { applyAudio } from "./audio.js";
-import { normalizeYouTube } from "./pure.js";
+import { normalizeYouTube, makeObjectUrlSlot } from "./pure.js";
 
 // True while a video/link is resolving or loading. The submit CTAs (load button + url field) are disabled
 // for the duration so a second submit can't race the first (avoids swapping the source mid-load).
@@ -23,11 +23,18 @@ export function refreshLoadBtn(): void {
 }
 
 const MAX_SECONDS = 300; // deny anything longer than 5 minutes (both youtube + dropped files)
+
+// A dropped file plays via a blob: object URL, which pins the WHOLE file (≤50MB) in memory until revoked.
+// The slot holds at most one and frees it whenever we move to a new source (another file, a link, or the
+// >5min reject), so reloads can't leak. (Logic lives in pure.ts, node-tested.)
+const urlSlot = makeObjectUrlSlot();
+
 export function playSrc(src: string): void {
   rt.firstPaintPending = true; // hold the reveal + CTA block until the first ascii frame actually paints
   video.onloadedmetadata = () => {
     if (isFinite(video.duration) && video.duration > MAX_SECONDS) {
       video.pause(); video.removeAttribute("src"); video.load(); // stop + release the source
+      urlSlot.free(); // and free its blob — we're discarding this source
       document.body.classList.remove("playing");
       return showError("sorry — we only support videos under 5 minutes");
     }
@@ -53,7 +60,7 @@ export function loadFile(file: File): void {
   if (file.size > MAX_BYTES) return showError("sorry — mp4 must be under 50MB");
   rt.currentFile = file; rt.currentSourceId = "";
   setComputing(true); startLoader(false);
-  playSrc(URL.createObjectURL(file));
+  playSrc(urlSlot.set(file)); // set() frees the previous file's blob, then mints + tracks this one
 }
 
 // The loader visual is a pure-CSS mosaic (no render-loop cost). It covers two waits: a youtube resolve
@@ -76,6 +83,7 @@ export async function loadYouTube(url: string): Promise<void> {
   url = normalizeYouTube(url);
   rt.currentFile = null;
   rt.currentSourceId = (url.match(/[?&]v=([A-Za-z0-9_-]{11})/) || [, ""])[1] || url;
+  urlSlot.free(); // switching away from any dropped file — free its blob
   setComputing(true); startLoader(true);
   const fail = (m?: string) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
 
@@ -108,6 +116,7 @@ export function loadInput(text: string): void {
   if (!s) return;
   if (/youtu\.?be/i.test(s)) { loadYouTube(s); return; } // youtube.com / youtu.be
   rt.currentFile = null; rt.currentSourceId = s;
+  urlSlot.free(); // switching to a direct URL — free any dropped-file blob
   setComputing(true); startLoader(false);
   playSrc(s); // treat anything else as a direct video URL
 }

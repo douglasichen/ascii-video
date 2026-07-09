@@ -222,3 +222,19 @@ export function embedSig(sourceId: string, s: EmbedSettings, cols: number, rows:
     s.saturation, s.contrast, s.brightness, s.invert, cols, rows,
     s.fade, s.maxfps]);
 }
+
+// Owns at most ONE live blob: object URL. A dropped file plays via URL.createObjectURL, which pins the whole
+// file in memory until revoked; nothing revoked it, so every reload leaked one. `set` frees the previous URL
+// before minting the next; `free` releases the current one. create/revoke are injected so this is DOM-free
+// and node-testable (defaults to the real URL globals in the browser). See tests/pure.test.ts.
+export interface ObjectUrlSlot { set(blob: Blob): string; free(): void; }
+export function makeObjectUrlSlot(
+  create: (b: Blob) => string = (b) => URL.createObjectURL(b),
+  revoke: (u: string) => void = (u) => URL.revokeObjectURL(u),
+): ObjectUrlSlot {
+  let cur: string | null = null;
+  return {
+    set(blob) { if (cur) revoke(cur); cur = create(blob); return cur; },
+    free() { if (cur) { revoke(cur); cur = null; } },
+  };
+}

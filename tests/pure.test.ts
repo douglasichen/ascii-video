@@ -98,3 +98,31 @@ test("pure.ts — palette, contrast-LUT order, grid, 125-cube, colour helpers, n
 
   console.log(`PASS: src/pure.ts — ${passes} assertions (palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig)`);
 });
+
+// makeObjectUrlSlot: the fix for the dropped-file blob leak (sources.ts created object URLs and never revoked
+// them). Inject fake create/revoke so the lifecycle is testable without a DOM. Fails if `set` stops freeing
+// the previous URL — i.e. if the leak is reintroduced.
+test("pure.ts — makeObjectUrlSlot frees the previous blob on set() and on free()", () => {
+  let passes = 0;
+  const ok = (c: boolean, m: string) => { assert.ok(c, m); passes++; };
+
+  const revoked: string[] = [];
+  let n = 0;
+  const slot = P.makeObjectUrlSlot(() => "blob:mock-" + (++n), (u) => { revoked.push(u); });
+
+  const u1 = slot.set({} as Blob);
+  ok(u1 === "blob:mock-1", "set() returns the freshly-minted URL");
+  ok(revoked.length === 0, "nothing to revoke on the first set()");
+
+  const u2 = slot.set({} as Blob);
+  ok(u2 === "blob:mock-2", "second set() mints a new URL");
+  ok(revoked.length === 1 && revoked[0] === u1, "second set() revokes the FIRST url (no leak)");
+
+  slot.free();
+  ok(revoked.length === 2 && revoked[1] === u2, "free() revokes the current url");
+
+  slot.free();
+  ok(revoked.length === 2, "free() is idempotent — nothing left to revoke");
+
+  console.log(`PASS: src/pure.ts makeObjectUrlSlot — ${passes} assertions`);
+});
