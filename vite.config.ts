@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, configDefaults } from "vitest/config";
 import { resolve } from "node:path";
 
 // Multi-page build: index.html (served at /) + embed.html (served at /embed.html — every already-baked
@@ -17,5 +17,11 @@ export default defineConfig({
         embed: resolve(__dirname, "embed.html"),
       },
     },
+  },
+  test: {
+    // Spawned agents run in throwaway git worktrees under .claude/worktrees/, each a full checkout with
+    // its own copy of tests/. Without this, `npm test` globs all of them — dozens of stale duplicate suites
+    // that slow the run and can false-fail under CPU contention. Only ever run the real tests/ at the root.
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
   },
 });
