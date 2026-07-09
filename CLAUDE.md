@@ -83,8 +83,9 @@ level → ASCII character → tinted DOM text**.
   `hexHue`/`mixHex`/`clamp`/`bandAvg`), `normalizeYouTube`, and `embedSig`.
   **No `document`/`window`** — keep it that way so it stays node-importable.
 - **`src/codec.ts`** — the shared `.asciiv` codec (was the standalone
-  `asciiv-codec.js`): `encodeAsciiv`/`decodeAsciiv`/`buildRows`/`buildPaletteCSS`/
-  `validHeader`/`frameAt`. Imported by `embed.ts` (encode) AND `embed-page.ts`
+  `asciiv-codec.js`): `encodeAsciiv2`/`resampleToFps`/`buildRows2` (v:2) +
+  `encodeAsciiv`/`buildRows`/`frameAt` (v:1 legacy) + `decodeAsciiv`/
+  `buildPaletteCSS`/`validHeader`. Imported by `embed.ts` (encode) AND `embed-page.ts`
   (decode) so the baked and live players can never drift. Node-runnable
   (CompressionStream/Response exist in Node 18+) so the format round-trips in a
   headless test.
@@ -131,8 +132,11 @@ level → ASCII character → tinted DOM text**.
   preservation lock — plus saturation sat=0 byte-match, cube validity, and the
   cube-vs-gray span run-count ratio staying ~1.3x), `pure.test.ts` (palette /
   LUT order / grid / cube / colour helpers / `normalizeYouTube` / `embedSig`),
-  `embed.test.ts` (codec round-trip + `validHeader`/decode fail-closed +
+  `embed.test.ts` (v:1 codec round-trip + `validHeader`/decode fail-closed +
   capture-size invariant + playback phase + timestamp `frameAt`),
+  `asciiv2.test.ts` (the v:2 format: `resampleToFps` vs ground truth + the
+  bounded-sync-error composition proof, v:2 round-trip/byte-stability, the
+  fixed-fps playback mapping, v:1-still-decodes + v:2 fail-closed/bomb),
   `bake-hidden.test.ts` + `bake-startframe.test.ts` (the bake guards).
   `tests/helpers.ts` is the trusted baseline + synthetic frame generators (ported
   from the old render-bench/color-check benches). The old
@@ -184,13 +188,11 @@ level → ASCII character → tinted DOM text**.
   the cube. Base colour and saturation **combine** (not mutually exclusive): at any
   saturation the chosen colour still tints the low end, and the mix rides up toward
   the video's own colour as saturation increases (base white = neutral, i.e. the old
-  gray→video behaviour). Only active with shading on. **Live-only:** saturation is NOT
-  carried into baked embeds — the bake stores only per-cell char-indices and the
-  `.asciiv` format + embed player render the 8-level gray ramp tinted by `colour`, so a
-  saturated clip you *save* comes out gray/base-tinted. It's therefore excluded from
-  `embedSig` (keying on it would mint distinct S3 keys for byte-identical bakes). To make
-  embeds WYSIWYG you'd have to carry the per-cell cube index in the frame stream (a
-  versioned `.asciiv` format change) and add saturation back to `embedSig`.
+  gray→video behaviour). Only active with shading on. Since `.asciiv` **v:2**,
+  saturation IS carried into baked embeds — the bake captures each cell's displayed
+  colour key (gray level or cube index) alongside its glyph, so a saved clip is
+  WYSIWYG and saturation is back in `embedSig` (it changes the baked bytes). See
+  "Baked embeds".
 - **Build assembly: one cons-string, not an array + join.** `paint()` grows the
   whole frame's markup with `out += …` rather than pushing per-cell parts into an
   array and `join()`-ing. V8 builds it as a rope and flattens once at assignment,
@@ -324,6 +326,51 @@ things at once:
 
 `api/save.py` validates the hash is 64 hex before trusting it as a key.
 Progress shows in the modal's `#embedstat`, not by blocking the button.
+
+### The `.asciiv` format: v:2 (fixed-fps, WYSIWYG colour) and why
+
+Container (both versions): `"ASCV" | u32 headerLen | header JSON | u32 audioLen
+| audio bytes | gzip(frame stream)`. The codec (`src/codec.ts`) is shared by the
+encoder (`embed.ts`) and the embed player (`embed-page.ts`) and dispatches on
+`header.v`. Audio is the MediaRecorder blob, embedded as-is.
+
+**v:2 — what the bake writes now.** Two ideas:
+
+- **Fixed framerate, one clock.** Capture is rVFC-driven and UNEVEN in time.
+  v:1 shipped the raw per-frame capture timestamps (`times[]`) and made the
+  player map the audio clock through them — which meant *three* clocks (frame
+  origin `recStart`, the audio recorder's real start, and the playback period:
+  `audioEl.duration` vs `durationMs` vs the times span) that all had to agree
+  and never quite did. Every mismatch was a sync bug (the freeze, the missing
+  beginning, frames-ahead-of-audio). v:2 kills the mapping instead of patching
+  it: at bake time `resampleToFps` snaps the capture onto a **uniform fps grid
+  aligned to the audio recorder's own t=0** (`recStart` is stamped at
+  `mr.onstart`, not after `mr.start()` returns — that gap was the "frames run
+  ahead" origin bug). Each grid instant takes the frame that was actually on
+  screen then; grid instants before the first capture take frame 0 (the
+  seek-to-0 start frame), so the foreground-only timeline can't bake in gaps.
+  `durationMs` is derived as `frameCount/fps*1000`, so the header cannot
+  disagree with itself. Playback is `frame = floor(phase * fps)` clamped to
+  `frameCount-1`, wrapping on the audio's own duration — a constant, bounded,
+  non-accumulating error (≤ one grid step + one capture gap; proven in
+  `tests/asciiv2.test.ts`). No `times[]`, no binary search, no drift.
+- **WYSIWYG per-cell colour.** Each cell is a packed u16: low 4 bits = ramp
+  char-index (0..9), bits 4+ = the colour key the live renderer *actually
+  displayed* — a gray level 0..7, or (when `header.cube`) a 125-colour cube
+  index 0..124, i.e. saturation carries into the bake. `buildFrameHTML` fills
+  the capture buffer with exactly these keys, and the embed player's
+  `buildRows2` reproduces the live markup **byte-for-byte** (locked in
+  `tests/golden-render.test.ts`). Colour stays a tiny fixed class palette
+  (never raw RGB), so the span-merge perf mechanism is untouched. Frame stream:
+  keyframe = `cols*rows` u16 LE, then per frame `u32 changedCount +
+  changed*(u32 cellIndex, u16 cell)` — duplicated resampled frames cost 4
+  bytes. `saturation` is part of `embedSig` again (it changes the bytes).
+
+**v:1 — legacy, decode frozen.** Already-published S3 embeds are v:1 (u8
+char-index cells, colour *derived* from the glyph, optional `times[]`); the
+player keeps the old `frameAt`/even-phase paths for them, unchanged. The
+decoder fail-closes on unknown versions, malformed fields, and oversized
+decompressed streams (gzip-bomb cap covers both layouts).
 
 ## Deployment (Vercel)
 

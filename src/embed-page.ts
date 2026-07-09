@@ -1,7 +1,8 @@
 // embed-page.ts — the embed player (embed.html). Fetches a baked .asciiv from S3 by ?id=, decodes it with
 // the shared codec (src/codec.ts), and plays the ascii back against the embedded audio track. Kept a
 // separate entry from the main player: it's a tiny read-only viewer. See CLAUDE.md "Baked embeds".
-import { buildRows, buildPaletteCSS, decodeAsciiv, frameAt } from "./codec.js";
+import { buildRows, buildRows2, buildPaletteCSS, decodeAsciiv, frameAt } from "./codec.js";
+import { buildColorCubeCSS } from "./pure.js";
 
 // Public S3 base for baked clips (bucket name is not secret). id = <timestamp>-<uuid>.asciiv
 const S3_BASE = "https://ascii-video-clips-992382605182.s3.us-east-1.amazonaws.com/";
@@ -10,7 +11,8 @@ const loadEl = document.getElementById("load") as HTMLElement;
 const errEl = document.getElementById("err") as HTMLElement;
 const tap = document.getElementById("tap") as HTMLElement;
 const audioEl = document.getElementById("audio") as HTMLAudioElement;
-let frames: Uint8Array[] = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0, fadeOn = false, times: number[] | null = null;
+let frames: Uint8Array[] | Uint16Array[] = [], cols = 0, rows = 0, fps = 30, shading = true, raf = 0, fadeOn = false, times: number[] | null = null;
+let v2 = false, cube = false; // .asciiv v:2 — fixed-fps timeline, packed char+colour cells (cube = 125-colour keys)
 // Authoritative loop period (seconds) from the header. Used to map the clock -> frame index instead of
 // t*fps: fps is round(frameCount/dur) (an average over an UNEVEN, maxfps-throttled capture), so t*fps
 // drifts from the real loop length and the ascii wraps a hair before/after the audio -> a visible jump
@@ -40,8 +42,9 @@ window.addEventListener("resize", fit);
 
 function draw(i: number) {
   const g = frames[((i % frames.length) + frames.length) % frames.length];
-  if (shading) screen.innerHTML = buildRows(g, cols, rows, true);
-  else screen.textContent = buildRows(g, cols, rows, false);
+  const html = v2 ? buildRows2(g as Uint16Array, cols, rows, shading, cube) : buildRows(g as Uint8Array, cols, rows, shading);
+  if (shading) screen.innerHTML = html;
+  else screen.textContent = html;
 }
 // Frame index follows the audio clock ONLY when audio is genuinely advancing (playing AND currentTime moving);
 // otherwise a wall-clock timer drives it. This keeps the ascii animating no matter what audio does — blocked,
@@ -67,10 +70,16 @@ function loop() {
     let v = 1; if (a < f) v = a / f; else if (a > period - f) v = (period - a) / f;
     audioEl.volume = v < 0 ? 0 : v > 1 ? 1 : v;
   }
-  // Clock -> frame index. With per-frame times (new files) map by REAL capture cadence so the animation
-  // tracks the audio through the uneven capture; otherwise the even-phase mapping (old files). Both wrap in
-  // lockstep with `period`; draw() re-mods defensively.
-  draw(times ? frameAt(times, period * 1000, t * 1000) : Math.floor((t % period) / period * frames.length));
+  // Clock -> frame index.
+  // v:2 — the baked timeline is a uniform fps grid sharing the audio's origin, so the index is just
+  //   floor(phase * fps), clamped: if the audio blob runs a hair longer than frameCount/fps the last frame
+  //   holds until the wrap (a one-frame tail hold, never accumulating drift); both wrap on `period`.
+  // v:1 — unchanged for already-published files: per-frame capture times when present (frameAt), else the
+  //   even-phase mapping. draw() re-mods defensively.
+  const phase = ((t % period) + period) % period;
+  draw(v2 ? Math.min(frames.length - 1, Math.floor(phase * fps))
+    : times ? frameAt(times, period * 1000, t * 1000)
+    : Math.floor(phase / period * frames.length));
   raf = requestAnimationFrame(loop);
 }
 
@@ -133,12 +142,15 @@ async function load() {
 
   const h = dec.header;
   frames = dec.frames; cols = h.cols; rows = h.rows; fps = h.fps; shading = h.shading; fadeOn = !!h.fade;
-  // Per-frame capture times (v:1 files after the sync fix). Absent on older files -> times stays null and
-  // loop() falls back to the even-phase mapping. Guard the length in case a header slips through mismatched.
-  times = Array.isArray(h.times) && h.times.length === frames.length ? h.times : null;
+  v2 = h.v === 2; cube = v2 && !!h.cube;
+  // Per-frame capture times (late v:1 files only; v:2 needs none). Absent -> times stays null and loop()
+  // falls back to the even-phase mapping. Guard the length in case a header slips through mismatched.
+  times = !v2 && Array.isArray(h.times) && h.times.length === frames.length ? h.times : null;
   // Loop period: header durationMs is authoritative; fall back to frameCount/fps if it's missing/bogus.
   clipDur = ((h.durationMs ?? 0) > 0 ? (h.durationMs as number) / 1000 : 0) || (frames.length / fps) || 10;
   document.head.appendChild(document.createElement("style")).textContent = buildPaletteCSS(h.colour);
+  // v:2 cube colours (saturation carried into the bake): the fixed 125-colour class palette, same as live.
+  if (cube) document.head.appendChild(document.createElement("style")).textContent = buildColorCubeCSS();
   screen.style.color = h.colour;
   loadEl.style.display = "none";
   measureCharAspect();

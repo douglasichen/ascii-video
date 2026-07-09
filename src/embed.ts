@@ -6,7 +6,7 @@
 import { embedBtn, embedWrap, embedCode, video } from "./dom.js";
 import { state, rt } from "./state.js";
 import { embedSig } from "./pure.js";
-import { encodeAsciiv, type EncodeHeader } from "./codec.js";
+import { encodeAsciiv2, resampleToFps, type EncodeHeader } from "./codec.js";
 
 // Presigned S3 POST returned by /api/save on a cache MISS (a HIT returns { cached:true } instead).
 type SaveUpload = { url: string; fields: Record<string, string> };
@@ -71,17 +71,22 @@ async function seekToStart(video: HTMLVideoElement): Promise<void> {
   }
 }
 
-// Encode the captured frames + audio to .asciiv and upload to the presigned S3 key. Runs AFTER the recorder
-// has stopped — reads only the finished capture buffers (rt.recFrames/recTimes), no live timing state.
+// Encode the captured frames + audio to .asciiv v:2 and upload to the presigned S3 key. Runs AFTER the
+// recorder has stopped — reads only the finished capture buffers (rt.recFrames/recTimes), no live timing
+// state. The v:2 idea: instead of shipping the uneven capture timestamps and making the player map between
+// three clocks (the v:1 drift factory), RESAMPLE here onto a uniform fps grid whose t=0 is the audio
+// recorder's start (recStart is stamped at mr.onstart) — playback is then floor(t*fps) with one origin,
+// one rate, one period. durationMs is derived from frameCount/fps so the header can never disagree.
 async function encodeAndUpload(upload: SaveUpload, audioBlob: Blob | null, dur: number): Promise<void> {
   const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
-  const fps = Math.max(1, Math.round(rt.recFrames.length / dur));
-  // times[] = each frame's real capture instant (ms from recStart); durationMs = the FULL recording span
-  // (the loop period), so the last frame holds until the loop wraps in lockstep with the ~dur-long audio.
-  const times = rt.recTimes.map(t => Math.round(t));
+  const fps = Math.min(60, Math.max(1, Math.round(rt.recFrames.length / dur)));
+  const frameCount = Math.max(1, Math.round(dur * fps));
+  const frames = resampleToFps(rt.recFrames, rt.recTimes, fps, frameCount);
   const header: EncodeHeader = { fps, cols: rt.cols, rows: rt.rows, colour: state.color, shading: state.shading, fade: state.fade,
-                   durationMs: Math.round(dur * 1000), times, audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
-  const bytes = await encodeAsciiv(header, rt.recFrames, audio);
+                   durationMs: Math.round((frameCount / fps) * 1000),
+                   cube: state.shading && state.saturation > 0, // colour keys are cube indices (saturation carries into the bake)
+                   audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
+  const bytes = await encodeAsciiv2(header, frames, audio);
   rt.recFrames = []; rt.recTimes = []; // free memory early
   const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
   Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v));
@@ -126,9 +131,19 @@ async function bakeInBackground(upload: SaveUpload): Promise<void> {
   try {
     if (video.paused) await video.play();
     await seekToStart(video);
-    if (mr) mr.start();
-    // recStart is the origin frame timestamps are measured from — set it right at mr.start()/recording so it
-    // matches the audio recording's own t=0. Playback maps audioEl.currentTime through these times.
+    // recStart is the origin frame timestamps are measured from, and it MUST be the audio recording's own
+    // t=0 — the baked timeline is aligned to the audio (resampleToFps). mr.start() begins capture but
+    // returns before it's actually rolling; stamping recStart "right after start()" put the frame origin
+    // LATER than the audio's, so every baked frame indexed slightly AHEAD of the audio (the v:1 drift).
+    // Wait for onstart (the recorder reporting capture has begun), with a timeout so a browser that never
+    // fires it can't hang the bake.
+    if (mr) await new Promise<void>(res => {
+      let done = false;
+      const go = () => { if (!done) { done = true; res(); } };
+      mr!.onstart = go;
+      setTimeout(go, 300);
+      mr!.start();
+    });
     rt.recStart = performance.now();
     // If the tab is ALREADY hidden the instant recording starts (e.g. switched away during the /api/save
     // fetch, before onVis was even attached — no transition fires), seed the hidden state by hand so that

@@ -59,7 +59,7 @@ export function paint(): Timings {
   const tBuild = performance.now();
   // brightness / contrast / invert fold into this one per-frame LUT (see pure.buildContrastLUT).
   buildContrastLUT(CONTRAST_LUT, state.contrast, state.brightness, state.invert);
-  const rec = rt.recording ? new Uint8Array(rt.cols * rt.rows) : null; // capture char-indices while baking an embed
+  const rec = rt.recording ? new Uint16Array(rt.cols * rt.rows) : null; // capture displayed cells (glyph+colour) while baking an embed
   const out = buildFrameHTML(data, rt.cols, rt.rows, state, CONTRAST_LUT, rec);
   if (rec) { rt.recFrames.push(rec); rt.recTimes.push(performance.now() - rt.recStart - rt.recPausedMs); } // frame + its real capture time
   const tDom = performance.now();
