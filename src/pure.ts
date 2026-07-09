@@ -16,7 +16,6 @@ export interface EmbedSettings {
   color: string;
   shading: boolean;
   detail: number;
-  saturation: number;
   contrast: number;
   brightness: number;
   invert: boolean;
@@ -214,12 +213,16 @@ export function normalizeYouTube(raw: string): string {
 
 // Canonical signature that keys a baked embed. It's the source id (or file-content hash, added in embed.ts)
 // PLUS the exact render settings, so an identical source+look always hashes to the same S3 key (instant
-// snippet + dedup). Every field that changes the baked artifact MUST be here: colour/shading/detail/
-// saturation/contrast/brightness/invert and the grid, plus fade (rides the header) and maxfps (sets the
-// captured frame count/fps) — else changing only those re-hits the cache and serves a stale bake.
+// snippet + dedup). Every field that changes the BAKED ARTIFACT must be here: colour/shading/detail/
+// contrast/brightness/invert and the grid, plus fade (rides the header) and maxfps (sets the captured
+// frame count/fps) — else changing only those re-hits the cache and serves a stale bake.
+// NOT saturation: the bake captures only per-cell char-indices, and the .asciiv format + embed player render
+// the 8-level gray ramp tinted by `colour` only — saturation (per-cell video colour) is a LIVE-only look and
+// never reaches the baked bytes. Keying on it would mint a distinct S3 key for byte-identical content (a
+// dedup miss). If embeds ever carry per-cell colour, add it back here alongside that format change.
 export function embedSig(sourceId: string, s: EmbedSettings, cols: number, rows: number): string {
   return JSON.stringify([sourceId, s.color, s.shading, s.detail,
-    s.saturation, s.contrast, s.brightness, s.invert, cols, rows,
+    s.contrast, s.brightness, s.invert, cols, rows,
     s.fade, s.maxfps]);
 }
 
