@@ -133,7 +133,7 @@ async function bakeInBackground(upload: SaveUpload): Promise<void> {
     // If the tab is ALREADY hidden the instant recording starts (e.g. switched away during the /api/save
     // fetch, before onVis was even attached — no transition fires), seed the hidden state by hand so that
     // opening span is still excluded and rVFC-starved frames don't bake a gap.
-    if (document.hidden) { hiddenSince = rt.recStart; if (mr && mr.state === "recording") mr.pause(); }
+    if (document.hidden) { hiddenSince = rt.recStart; video.pause(); if (mr && mr.state === "recording") mr.pause(); }
     rt.recording = true;
     // Wait one full FOREGROUND `dur` — poll the adjusted elapsed (excludes recPausedMs + the current hidden
     // span) so tab-switches don't shorten the recording. This is the timing spine; leave it alone.
