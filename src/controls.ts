@@ -1,10 +1,10 @@
 // controls.ts — the control panel: builds the rows from CONTROLS (see state.ts), wires every input, and
 // setControl (the single write path for a tunable). All tunables live in the one CONTROLS object so a new
 // one is added there, not wired up ad hoc.
-import { CONTROLS, state, base, DRIVEN, rt, type State } from "./state.js";
+import { CONTROLS, state, base, rt, type State } from "./state.js";
 import { configEl, video, cfgToggle } from "./dom.js";
 import { buildPalette, computeGrid, paint } from "./render.js";
-import { initAudio, rx } from "./reactive.js";
+import { initAudio, restoreBase } from "./reactive.js";
 
 export function setControl(key: keyof State, value: number | boolean | string): void {
   (state as unknown as Record<string, unknown>)[key] = value;
@@ -15,7 +15,7 @@ export function setControl(key: keyof State, value: number | boolean | string): 
   if (key === "react") {
     document.body.classList.toggle("music-on", value as boolean); // reveal/hide the music parameter rows
     if (value) initAudio();
-    else { for (const k of DRIVEN) (state as unknown as Record<string, unknown>)[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; } // restore instantly, even while paused
+    else restoreBase(); // restore instantly, even while paused
   }
   if (key === "detail") computeGrid();
   if (key === "color") buildPalette(value as string);
@@ -33,7 +33,7 @@ export function buildControls(): void {
   let curSection = "";
   for (const key in CONTROLS) {
     const c = CONTROLS[key as keyof State];
-    if (c.section && c.section !== curSection) { // full-width section header whenever the group changes
+    if (c.section !== curSection) { // full-width section header whenever the group changes
       curSection = c.section;
       const hd = document.createElement("div");
       hd.className = "section"; hd.textContent = curSection;

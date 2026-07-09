@@ -34,12 +34,15 @@ export function initAudio(): void {
   } catch (e) { /* no captureStream / no audio track / cross-origin (tainted) video -> reactivity stays off */ }
 }
 
-interface Rx { hist: number[]; env: number; lastBeat: number; hue: number; bass: number; mid: number; treb: number; on: boolean; beats: number; }
-export const rx: Rx = { hist: [], env: 0, lastBeat: 0, hue: 210, bass: 0, mid: 0, treb: 0, on: false, beats: 0 };
+interface Rx { hist: number[]; env: number; lastBeat: number; hue: number; bass: number; mid: number; treb: number; on: boolean; }
+export const rx: Rx = { hist: [], env: 0, lastBeat: 0, hue: 210, bass: 0, mid: 0, treb: 0, on: false };
+// The music-off invariant, in one place: restore every DRIVEN key to its resting `base` value and drop out
+// of music mode. Called from applyReactivity's off-branch AND setControl's react-toggle-off (controls.ts).
+export function restoreBase(): void { for (const k of DRIVEN) (state as any)[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; }
 export function applyReactivity(now: number): void {
   if (state.react && !audioReady) initAudio();
   if (!state.react || !audioReady) {
-    if (rx.on) { for (const k of DRIVEN) (state as any)[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; }
+    if (rx.on) restoreBase();
     return; // music off (or unavailable) → state stays exactly at the user's base values
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
@@ -57,7 +60,7 @@ export function applyReactivity(now: number): void {
   let vsum = 0; for (const v of h) vsum += (v - m) * (v - m); const sd = Math.sqrt(vsum / h.length);
   const kFac = 2.0 - (state.sensitivity / 100) * 1.4; // sens 0→k2.0 (strict) .. 1→k0.6 (loose)
   if (kick > m + kFac * sd && kick > 0.10 && now - rx.lastBeat > 200) {
-    rx.lastBeat = now; rx.env = 1; rx.beats++;
+    rx.lastBeat = now; rx.env = 1;
     rx.hue += 20 + rx.treb * 40; // each beat nudges the hue so colour keeps evolving
   }
   rx.env *= 0.86; // exponential envelope decay — the smooth pulse
