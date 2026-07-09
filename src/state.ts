@@ -102,7 +102,7 @@ export interface Rt {
   computing: boolean;
   firstPaintPending: boolean;
   recording: boolean;
-  recFrames: Uint8Array[];
+  recFrames: Uint16Array[]; // packed .asciiv v:2 cells (char-index | colourKey<<4), one grid per captured frame
   recTimes: number[];
   recStart: number;
   baking: boolean;

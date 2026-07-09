@@ -21,7 +21,7 @@ const data = new Uint8ClampedArray(COLS * ROWS * 4).fill(128);
 
 // The capture line, copied verbatim from render.ts paint(): a frame is recorded whenever rt.recording.
 function paintOnce(): void {
-  const rec = rt.recording ? new Uint8Array(rt.cols * rt.rows) : null;
+  const rec = rt.recording ? new Uint16Array(rt.cols * rt.rows) : null;
   buildFrameHTML(data, rt.cols, rt.rows, state, clut, rec);
   if (rec) { rt.recFrames.push(rec); rt.recTimes.push(0); }
 }

@@ -21,6 +21,7 @@ export interface EmbedSettings {
   invert: boolean;
   fade: boolean;
   maxfps: number;
+  saturation: number;
 }
 
 export const RAMP = " .:-=+*#%@";
@@ -120,15 +121,17 @@ export function gridDims(fontPx: number, availW: number, availH: number, videoW:
 // not an array-of-parts + join(): V8 grows it as a cons-string (rope) and flattens once at assignment, so
 // this skips both the per-cell array.push AND the join — measured ~68% less build time AND ~4x lower
 // worst-frame (the array+join path GC-spiked to 7-10ms; this holds ~2ms), on byte-identical output. See
-// bench/render-bench.js. When `rec` (a Uint8Array cols*rows) is passed it's filled with each cell's char
-// index (embed capture). Byte-for-byte identical to the pre-refactor paint() inner loop.
+// bench/render-bench.js. When `rec` (a Uint16Array cols*rows) is passed it's filled with each cell AS
+// DISPLAYED — packed char-index | colourKey<<4, the .asciiv v:2 cell (embed capture is WYSIWYG: the key is
+// the gray level, or the cube index when saturation>0; 0 with shading off). The HTML output is
+// byte-for-byte identical to the pre-refactor paint() inner loop (rec never changes it).
 export function buildFrameHTML(
   data: Uint8ClampedArray | Uint8Array,
   cols: number,
   rows: number,
   s: FrameSettings,
   clut: Uint8ClampedArray,
-  rec: Uint8Array | null,
+  rec: Uint16Array | null,
 ): string {
   let out = "";
   const shade = s.shading; // per-cell tinted spans vs plain one-colour text
@@ -144,10 +147,10 @@ export function buildFrameHTML(
     for (let c = 0; c < cols; c++, base += 4) {
       const R = clut[data[base]], G = clut[data[base + 1]], B = clut[data[base + 2]];
       const gray = R * 0.299 + G * 0.587 + B * 0.114;
+      let key = 0; // the colour actually shown (gray level or cube index) — also captured into rec
       if (shade) {
         // sat=0: quantize luminance to a gray level (unchanged signature path). sat>0: mix each channel
         // toward the source colour by t, then snap to the CQ^3 colour cube -> a small, run-mergeable palette.
-        let key;
         if (sat) {
           const gf = gray / 255, bR = baseR * gf, bG = baseG * gf, bB = baseB * gf; // base colour tinted by this cell's luminance
           key = (CQ_MAP[(bR + (R - bR) * t) | 0] * CQ + CQ_MAP[(bG + (G - bG) * t) | 0]) * CQ + CQ_MAP[(bB + (B - bB) * t) | 0];
@@ -160,7 +163,7 @@ export function buildFrameHTML(
       }
       const ci = gray * RAMP_SCALE < RAMP_LAST ? (gray * RAMP_SCALE) | 0 : RAMP_LAST;
       out += RAMP[ci];
-      if (rec) rec[r * cols + c] = ci;
+      if (rec) rec[r * cols + c] = ci | (key << 4); // the .asciiv v:2 cell: glyph + its exact displayed colour
     }
     if (shade) out += "</i>";
     if (r < rows - 1) out += "\n";
@@ -216,14 +219,12 @@ export function normalizeYouTube(raw: string): string {
 // snippet + dedup). Every field that changes the BAKED ARTIFACT must be here: colour/shading/detail/
 // contrast/brightness/invert and the grid, plus fade (rides the header) and maxfps (sets the captured
 // frame count/fps) — else changing only those re-hits the cache and serves a stale bake.
-// NOT saturation: the bake captures only per-cell char-indices, and the .asciiv format + embed player render
-// the 8-level gray ramp tinted by `colour` only — saturation (per-cell video colour) is a LIVE-only look and
-// never reaches the baked bytes. Keying on it would mint a distinct S3 key for byte-identical content (a
-// dedup miss). If embeds ever carry per-cell colour, add it back here alongside that format change.
+// saturation is back in (v:2): the bake now captures each cell's displayed colour key, so saturation
+// changes the baked bytes and must mint a distinct key. (It was excluded while embeds were gray-only.)
 export function embedSig(sourceId: string, s: EmbedSettings, cols: number, rows: number): string {
   return JSON.stringify([sourceId, s.color, s.shading, s.detail,
     s.contrast, s.brightness, s.invert, cols, rows,
-    s.fade, s.maxfps]);
+    s.fade, s.maxfps, s.saturation]);
 }
 
 // Owns at most ONE live blob: object URL. A dropped file plays via URL.createObjectURL, which pins the whole

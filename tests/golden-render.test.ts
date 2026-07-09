@@ -8,10 +8,10 @@ import assert from "node:assert";
 //   (2) output is STABLE (deterministic: same input -> same bytes).
 //   (3) sat>0 emits only valid cube classes k0..k124, and its VISIBLE characters match the gray path
 //       (saturation only recolours; it must never change which glyph a cell gets).
-//   (4) the captured char-indices feed codec.buildRows to the SAME characters (embed<->live agree on
-//       glyphs; the colour level is re-derived in the embed and may differ, which is by design).
+//   (4) the captured packed cells feed codec.buildRows2 to BYTE-IDENTICAL markup (embed playback is
+//       WYSIWYG vs the live render — glyphs AND colour, gray and cube paths both).
 import * as P from "../src/pure";
-import { buildRows } from "../src/codec";
+import { buildRows2 } from "../src/codec";
 import { makeFrame, makeColorFrame, makeClut, buildBaseline } from "./helpers";
 
 const stripTags = (html: string) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the glyph + newline stream
@@ -56,19 +56,23 @@ test("golden render — buildFrameHTML byte-identical to baseline, stable, cube-
           eq(P.buildFrameHTML(fr, cols, rows, { shading, saturation: 0, color: "#32cd32" }, clut, null), got, "sat=0 markup is colour-independent");
         }
 
-        // (4) captured char-indices -> codec buildRows produces the SAME glyphs as the live gray path
-        const rec = new Uint8Array(cols * rows);
+        // (4) captured packed cells -> codec buildRows2 reproduces the live markup BYTE-FOR-BYTE
+        //     (the .asciiv v:2 WYSIWYG lock: what the embed plays back is exactly what was on screen)
+        const rec = new Uint16Array(cols * rows);
         const grayHtml = P.buildFrameHTML(fr, cols, rows, { shading: true, saturation: 0, color: "#ffffff" }, clut, rec);
-        eq(stripTags(buildRows(rec, cols, rows, true)), stripTags(grayHtml), "codec buildRows glyphs match the live gray path");
-        eq(stripTags(buildRows(rec, cols, rows, false)), stripTags(grayHtml), "codec buildRows (turbo) glyphs match too");
+        eq(buildRows2(rec, cols, rows, true, false), grayHtml, "codec buildRows2 byte-matches the live gray markup");
+        eq(buildRows2(rec, cols, rows, false, false), stripTags(grayHtml), "codec buildRows2 (turbo) matches the plain-text render");
 
-        // (3) saturation path: valid cube classes only, glyphs unchanged vs gray
+        // (3) saturation path: valid cube classes only, glyphs unchanged vs gray, and buildRows2 (cube)
+        //     reproduces the saturated markup byte-for-byte from the capture
         for (const color of COLORS) {
           for (const saturation of [40, 100]) {
-            const satHtml = P.buildFrameHTML(fr, cols, rows, { shading: true, saturation, color }, clut, null);
+            const recSat = new Uint16Array(cols * rows);
+            const satHtml = P.buildFrameHTML(fr, cols, rows, { shading: true, saturation, color }, clut, recSat);
             eq(P.buildFrameHTML(fr, cols, rows, { shading: true, saturation, color }, clut, null), satHtml, "sat>0 deterministic");
             for (const m of satHtml.matchAll(/class=k(\d+)/g)) ok(+m[1] < 125, "cube class in range 0..124");
             eq(stripTags(satHtml), stripTags(grayHtml), "saturation recolours only — glyph stream is unchanged");
+            eq(buildRows2(recSat, cols, rows, true, true), satHtml, "codec buildRows2 (cube) byte-matches the live saturated markup");
           }
         }
       }

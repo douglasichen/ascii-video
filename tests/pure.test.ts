@@ -81,7 +81,7 @@ test("pure.ts — palette, contrast-LUT order, grid, 125-cube, colour helpers, n
   eq(P.normalizeYouTube("not a url"), "not a url", "junk falls through to raw");
   eq(P.normalizeYouTube("https://example.com/video.mp4"), "https://example.com/video.mp4", "non-youtube url untouched");
 
-  // ── embedSig: deterministic, sensitive to every BAKED field, and NOT to saturation ───────────────────
+  // ── embedSig: deterministic, sensitive to every BAKED field (incl. saturation since .asciiv v:2) ─────
   {
     const s = { color: "#ffffff", shading: true, detail: 6, saturation: 0, contrast: 50, brightness: 50, invert: false, fade: true, maxfps: 30 };
     const baseSig = P.embedSig("vid123", s, 200, 60);
@@ -90,14 +90,11 @@ test("pure.ts — palette, contrast-LUT order, grid, 125-cube, colour helpers, n
       ["source", () => P.embedSig("other", s, 200, 60)],
       ["cols", () => P.embedSig("vid123", s, 201, 60)],
       ["rows", () => P.embedSig("vid123", s, 200, 61)],
-      ...(["color", "shading", "detail", "contrast", "brightness", "invert", "fade", "maxfps"] as const).map(k =>
+      // saturation is back in the sig: v:2 bakes carry each cell's displayed colour, so sat changes the bytes
+      ...(["color", "shading", "detail", "contrast", "brightness", "invert", "fade", "maxfps", "saturation"] as const).map(k =>
         [k, () => P.embedSig("vid123", { ...s, [k]: typeof s[k] === "boolean" ? !s[k] : typeof s[k] === "number" ? (s[k] as number) + 1 : "#000000" }, 200, 60)] as [string, () => string]),
     ];
     for (const [name, f] of flips) ok(f() !== baseSig, "embedSig changes when " + name + " changes");
-    // saturation is a LIVE-only look — it never reaches the baked bytes, so it must NOT change the key (else
-    // sat 0 vs 50 mint distinct S3 keys for byte-identical content — a dedup miss). Locks that intent.
-    const withSat = { ...s, saturation: 87 }; // a variable, not a fresh literal → the extra field isn't an excess-property TS error
-    eq(P.embedSig("vid123", withSat, 200, 60), baseSig, "embedSig ignores saturation (embeds are gray/base-tinted)");
   }
 
   console.log(`PASS: src/pure.ts — ${passes} assertions (palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig)`);
