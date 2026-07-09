@@ -49,9 +49,55 @@ base64-embedded audio track.
 
 ## Architecture: the live player's rendering pipeline
 
-`index.html` is a single self-contained file (no build step, no
-framework). Pipeline, in order: **video → contrast/brightness/invert filter →
-luminance → quantized level → ASCII character → tinted DOM text**.
+`index.html` holds the markup + `<style>`; the JS is split into plain ES
+modules under `js/` (no build step, no framework, no bundler — Vercel serves
+the `.js` files statically). The page loads exactly two scripts: the classic
+`asciiv-codec.js` (sets `window.ASCIIV`) then `<script type="module"
+src="/js/main.js">`. Pipeline, in order: **video → contrast/brightness/invert
+filter → luminance → quantized level → ASCII character → tinted DOM text**.
+
+### Module layout (`js/`)
+
+- **`js/pure.js`** — the DOM-free core, imported by the browser modules AND by
+  the Node tests (so a refactor regression is actually caught). Owns the
+  byte-exact hot loop (`buildFrameHTML`), the quantization tables
+  (`QUANT_LEVEL`/`LEVEL_CLASS`, the `CQ` cube), `buildContrastLUT` (contrast→
+  invert→brightness order), `gridDims`/`fontPxFor`, `buildPaletteCSS`/
+  `buildColorCubeCSS`, the music colour helpers (`hslHex`/`hexHue`/`mixHex`/
+  `clamp`/`bandAvg`), `normalizeYouTube`, and `embedSig`. **No `document`/
+  `window`** — keep it that way so it stays node-importable.
+- **`js/state.js`** — `CONTROLS`, `state`/`base`, `DRIVEN`, and the `rt`
+  runtime object. **Shared-mutable-state pattern:** ES-module imports are
+  read-only in importers (you can't reassign an imported `let`), so every
+  reassignable shared primitive (`cols`, `rows`, `recording`, `recFrames`,
+  `recStart`, `computing`, `firstPaintPending`, `currentFile`, …) lives on `rt`
+  and is mutated in place (`rt.cols = …`). `state`/`base` are mutated-in-place
+  objects, exported directly. A leaf module (imports nothing).
+- **`js/dom.js`** — cached `getElementById` refs + `IS_MOBILE`.
+- **`js/render.js`** — the DOM glue around `pure.js`: `computeGrid`,
+  `buildPalette`, `paint()` (draw→build→dom), the rVFC `renderFrame`/
+  `scheduleFrame` loop, the fps profiler, `initRenderStyles`.
+- **`js/reactive.js`** — music reactivity (`initAudio`, `applyReactivity`, the
+  beat detector, `updateFade`, `rx`).
+- **`js/audio.js`** — playback audio policy (`applyAudio`/`syncAudio`, the
+  speaker toggle, gesture-to-unmute; `userMuted`/`activated` are module-local).
+- **`js/controls.js`** — the control-panel builder (`buildControls`) + `setControl`.
+- **`js/sources.js`** — `loadInput`/`loadFile`/`loadYouTube`/`playSrc`, the
+  loader overlay, and the `computing` concurrency guard (`setComputing`).
+- **`js/embed.js`** — the save CTA: `embedHash`/`startBake`/`bakeInBackground`/
+  `showSnippet` (uses `window.ASCIIV`).
+- **`js/main.js`** — the only entry point in the HTML: imports the rest, runs
+  each module's init, binds the cross-cutting events (resize, load/confirm,
+  drag-drop, keyboard, feedback, beforeunload), then kicks the render loop and
+  the default clip. Circular imports between render/reactive/sources/controls
+  are fine because no module calls an imported function at top-level
+  evaluation — only inside functions run later, after main's init.
+- Regression tests import the real `js/pure.js`: `bench/golden-render-check.js`
+  (locks `buildFrameHTML` byte-identical to the trusted baseline across a
+  settings matrix) and `bench/pure-check.js` (palette / LUT order / grid / cube
+  / colour helpers / `normalizeYouTube` / `embedSig`). `js/package.json`
+  (`{"type":"module"}`) only marks the dir ESM for Node — it's `.vercelignore`d
+  since the browser reads module-ness off the `<script type=module>` tag.
 
 - An offscreen `<canvas id="sample">` is the *only* canvas — it exists
   solely to call `drawImage(video, ...)` and `getImageData()` to sample the

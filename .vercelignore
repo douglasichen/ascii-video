@@ -13,3 +13,6 @@ __pycache__/
 .venv/
 .DS_Store
 bench/
+# js/ ES modules DO deploy (served statically). This file only marks them type:module for Node tests;
+# the browser reads type=module off the <script> tag, not here, so keep it out of the deploy.
+js/package.json
