@@ -51,7 +51,7 @@ def test_poll_run_id_no_path_traversal():
     orig = resolve._get
     resolve._get = fake_get
     try:
-        out = resolve.poll("../../key-value-stores/x/records/y", "dsid", "tok")
+        out = resolve.poll("../../key-value-stores/x/records/y", "tok")
     finally:
         resolve._get = orig
     assert out == {"status": "RUNNING"}, out
@@ -59,8 +59,36 @@ def test_poll_run_id_no_path_traversal():
     assert "actor-runs/..%2F" in captured["url"], captured["url"]  # slashes escaped, stays one segment
 
 
+def test_poll_cache_key_is_run_derived_not_client():
+    # Cache poisoning guard: the cache key + dataset must come from the RUN itself (its defaultDatasetId and
+    # its INPUT record), NEVER from client-supplied ?datasetId=/?videoId=. Otherwise a caller could resolve
+    # video A but write cache/<B>.json := A's url, defacing B for everyone for the 6-day TTL.
+    def fake_get(url):
+        if "/actor-runs/" in url:
+            return {"data": {"status": "SUCCEEDED", "defaultDatasetId": "REAL_DS",
+                             "defaultKeyValueStoreId": "REAL_KV"}}
+        if "/datasets/REAL_DS/items" in url:  # AssertionError if poll used any other (client) dataset id
+            return [{"status": "succeeded", "output": {"url": "https://legit.example/v.mp4"}}]
+        if "/key-value-stores/REAL_KV/records/INPUT" in url:
+            return {"startUrls": ["https://www.youtube.com/watch?v=jNQXAC9IVRw"]}
+        raise AssertionError("poll fetched an unexpected (client-controlled?) url: " + url)
+
+    puts = []
+    orig_get, orig_put = resolve._get, resolve.cache_put
+    resolve._get = fake_get
+    resolve.cache_put = lambda vid, url: puts.append((vid, url))
+    try:
+        out = resolve.poll("run123", "tok")
+    finally:
+        resolve._get, resolve.cache_put = orig_get, orig_put
+    assert out == {"status": "SUCCEEDED", "streamUrl": "https://legit.example/v.mp4"}, out
+    # key is the id parsed from the RUN's own INPUT, not anything a client could supply
+    assert puts == [("jNQXAC9IVRw", "https://legit.example/v.mp4")], puts
+
+
 if __name__ == "__main__":
     test_video_id()
     test_same_origin()
     test_poll_run_id_no_path_traversal()
+    test_poll_cache_key_is_run_derived_not_client()
     print("test_api.py: OK")
