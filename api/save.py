@@ -69,7 +69,9 @@ def same_origin(headers):
     src = headers.get("Origin") or headers.get("Referer") or ""
     if not src:
         return True
-    src_host = urllib.parse.urlparse(src).netloc.split(":")[0].lower()
+    # .hostname (stdlib) strips userinfo/port and lowercases; a hand-rolled
+    # netloc.split(":")[0] reads "https://us:pw@evil.com" as host "us" -> fails OPEN.
+    src_host = urllib.parse.urlparse(src).hostname or ""
     host = (headers.get("Host") or "").split(":")[0].lower()
     return bool(src_host) and src_host == host
 
