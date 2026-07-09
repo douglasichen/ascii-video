@@ -122,12 +122,14 @@ def _get(url):
 def poll(run_id, dataset_id, token, video_id=""):
     """{status} while running, or {status:'SUCCEEDED', streamUrl} once ready (and caches the URL)."""
     tok = urllib.parse.quote(token)
-    status = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id)}?token={tok}")["data"]["status"]
+    # safe="" escapes "/" too: run_id/dataset_id are client-controlled, and quote's default safe="/"
+    # would let "../.." traverse out of /actor-runs into arbitrary api.apify.com paths carrying our token.
+    status = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id, safe='')}?token={tok}")["data"]["status"]
     if status == "ABORTED":  # almost always the maxTotalChargeUsd cap tripping on a too-long video
         return {"status": "ABORTED", "error": "video too long (hit the cost limit)"}
     if status != "SUCCEEDED":
         return {"status": status}  # READY / RUNNING / FAILED / TIMED-OUT
-    items = _get(f"{API}/datasets/{urllib.parse.quote(dataset_id)}/items?token={tok}")
+    items = _get(f"{API}/datasets/{urllib.parse.quote(dataset_id, safe='')}/items?token={tok}")
     for it in items:
         if it.get("demo"):
             return {"status": "FAILED", "error": "Apify actor not activated (demo output)"}
