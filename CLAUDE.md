@@ -128,13 +128,14 @@ level → ASCII character → tinted DOM text**.
 - **Tests (`tests/`, Vitest, DOM-free, import the real `src/`):**
   `golden-render.test.ts` (locks `buildFrameHTML` byte-identical to the trusted
   baseline in `tests/helpers.ts` across a settings matrix — the behaviour-
-  preservation lock), `pure.test.ts` (palette / LUT order / grid / cube / colour
-  helpers / `normalizeYouTube` / `embedSig`), `embed.test.ts` (codec round-trip +
-  `validHeader`/decode fail-closed + capture-size invariant + playback phase +
-  timestamp `frameAt`), `color.test.ts` (saturation sat=0 byte-match + cube run
-  ratio), `bake-hidden.test.ts` + `bake-startframe.test.ts` (the bake guards).
+  preservation lock — plus saturation sat=0 byte-match, cube validity, and the
+  cube-vs-gray span run-count ratio staying ~1.3x), `pure.test.ts` (palette /
+  LUT order / grid / cube / colour helpers / `normalizeYouTube` / `embedSig`),
+  `embed.test.ts` (codec round-trip + `validHeader`/decode fail-closed +
+  capture-size invariant + playback phase + timestamp `frameAt`),
+  `bake-hidden.test.ts` + `bake-startframe.test.ts` (the bake guards).
   `tests/helpers.ts` is the trusted baseline + synthetic frame generators (ported
-  from the old `bench/render-bench.js`/`color-check.js`). The old
+  from the old render-bench/color-check benches). The old
   measurement-only benches (`render-bench`/`color-bench`/`variants`) were perf
   harnesses with no assertions; their one load-bearing assertion — the shipped
   build variant equals the baseline byte-for-byte — is covered by
@@ -178,7 +179,7 @@ level → ASCII character → tinted DOM text**.
   static CSS class (`.k123{color:#rrggbb}`, built once in a `<style>`), so a cell
   emits `<i class=k123>` — same short class-based markup as the gray levels, not
   inline styles. `saturation`=0 uses the untouched 8-level gray path (byte-identical
-  to before, asserted in `tests/color.test.ts`); >0 mixes each channel from the
+  to before, asserted in `tests/golden-render.test.ts`); >0 mixes each channel from the
   **base-colour-tinted gray** toward the source colour by `sat/100`, then snaps to
   the cube. Base colour and saturation **combine** (not mutually exclusive): at any
   saturation the chosen colour still tints the low end, and the mix rides up toward
