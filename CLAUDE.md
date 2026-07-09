@@ -350,3 +350,33 @@ playback and the canvas `getImageData` the renderer needs (`<video>` has
 documented escape hatch if this proves unreliable is proxying/downloading
 through the function. Still out of scope: embed/snippet generator, auth, rate
 limiting.
+
+## Contributing workflow (PRs + agent review)
+
+Non-trivial changes land through a pull request, even when an agent is working
+solo — the PR is the durable record of what changed and why. The loop:
+
+1. **Branch + PR.** Work on a `fix/…` / `simplify/…` / `feat/…` branch and open
+   a PR against `main` whose body states the problem, the fix, and how it was
+   verified. Keep each PR single-purpose; when parallel agents are involved,
+   partition by **non-overlapping file sets** so the PRs can never conflict.
+2. **Green before review.** `npm run typecheck`, `npm test` (Vitest), and
+   `npm run build` must pass; Python changes also run `python3 tests/test_api.py`.
+   A bug fix adds a test that **fails before and passes after** the change.
+3. **Agent review.** A separate reviewer (usually a spawned agent) checks the
+   branch out in its own worktree, re-runs the suites, adversarially verifies
+   the claim, and leaves a review **comment** with a verdict (LGTM /
+   request-changes). GitHub blocks approving your *own* PR, so the sign-off is a
+   comment-type review, not a formal Approve.
+4. **Merge.** Once reviewed and green, merge to `main` (`gh pr merge --merge
+   --delete-branch`). `main` is the source of truth.
+5. **Deploy is separate.** Vercel is **not** wired to auto-deploy on a `main`
+   push — production only updates on an explicit `vercel --prod`. Merging ≠
+   shipping; deploy deliberately (security fixes especially).
+
+Practical notes: spawned agents each run in a throwaway git worktree under
+`.claude/worktrees/`; `gh auth setup-git` wires `git push` to the `gh`
+credential (a bare `git push` over HTTPS otherwise fails to authenticate).
+The bench suite lives in `tests/*.test.ts` (Vitest, importing the real
+`src/*.ts`) — a refactor that changes `pure.buildFrameHTML` output for the same
+inputs breaks `golden-render.test.ts` on purpose.
