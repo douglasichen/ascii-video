@@ -1,26 +1,26 @@
-// controls.js — the control panel: builds the rows from CONTROLS (see state.js), wires every input, and
+// controls.ts — the control panel: builds the rows from CONTROLS (see state.ts), wires every input, and
 // setControl (the single write path for a tunable). All tunables live in the one CONTROLS object so a new
 // one is added there, not wired up ad hoc.
-import { CONTROLS, state, base, DRIVEN, rt } from "./state.js";
+import { CONTROLS, state, base, DRIVEN, rt, type State } from "./state.js";
 import { configEl, video, cfgToggle } from "./dom.js";
 import { buildPalette, computeGrid, paint } from "./render.js";
 import { initAudio, rx } from "./reactive.js";
 
-export function setControl(key, value) {
-  state[key] = value;
-  base[key] = value; // remember the resting value; music mode modulates the DRIVEN keys around base
-  const input = document.getElementById(`ctrl-${key}`);
-  if (CONTROLS[key].type === "checkbox") input.checked = value; else input.value = value;
-  if (!CONTROLS[key].type) document.getElementById(`val-${key}`).textContent = value + CONTROLS[key].unit; // only range controls show a value
+export function setControl(key: keyof State, value: number | boolean | string): void {
+  (state as unknown as Record<string, unknown>)[key] = value;
+  (base as unknown as Record<string, unknown>)[key] = value; // remember the resting value; music mode modulates the DRIVEN keys around base
+  const input = document.getElementById(`ctrl-${key}`) as HTMLInputElement;
+  if (CONTROLS[key].type === "checkbox") input.checked = value as boolean; else input.value = String(value);
+  if (!CONTROLS[key].type) (document.getElementById(`val-${key}`) as HTMLElement).textContent = value + (CONTROLS[key].unit ?? ""); // only range controls show a value
   if (key === "react") {
-    document.body.classList.toggle("music-on", value); // reveal/hide the music parameter rows
+    document.body.classList.toggle("music-on", value as boolean); // reveal/hide the music parameter rows
     if (value) initAudio();
-    else { for (const k of DRIVEN) state[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; } // restore instantly, even while paused
+    else { for (const k of DRIVEN) (state as unknown as Record<string, unknown>)[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; } // restore instantly, even while paused
   }
   if (key === "detail") computeGrid();
-  if (key === "color") buildPalette(value);
+  if (key === "color") buildPalette(value as string);
   // keep the hex field in sync with the swatch, but don't clobber it while the user is typing in it
-  if (CONTROLS[key].type === "color") { const hx = document.getElementById(`hex-${key}`); if (hx && document.activeElement !== hx) hx.value = value; }
+  if (CONTROLS[key].type === "color") { const hx = document.getElementById(`hex-${key}`) as HTMLInputElement | null; if (hx && document.activeElement !== hx) hx.value = value as string; }
   // Re-sample the current frame at the new grid RIGHT NOW. The render loop is idle while the video is
   // paused, so without this a detail change would only swap the font size on the stale text — scaling
   // it, which looks like a zoom. Repainting resamples at the new resolution so paused (and mid-play)
@@ -29,10 +29,10 @@ export function setControl(key, value) {
 }
 
 // Build the panel DOM from CONTROLS, then attach the input/hex/reset/toggle listeners. Called from main.
-export function buildControls() {
+export function buildControls(): void {
   let curSection = "";
   for (const key in CONTROLS) {
-    const c = CONTROLS[key];
+    const c = CONTROLS[key as keyof State];
     if (c.section && c.section !== curSection) { // full-width section header whenever the group changes
       curSection = c.section;
       const hd = document.createElement("div");
@@ -50,7 +50,7 @@ export function buildControls() {
     else if (c.type === "checkbox") input = `<input type="checkbox" id="ctrl-${key}" ${c.default ? "checked" : ""}>`;
     else input = `<input type="range" id="ctrl-${key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${c.default}">`;
     // value cell: range -> numeric readout; checkbox/colour -> empty. Every row keeps 4 grid cells aligned.
-    const valCell = `<span class="val" id="val-${key}">${c.type ? "" : c.default + c.unit}</span>`;
+    const valCell = `<span class="val" id="val-${key}">${c.type ? "" : c.default + (c.unit ?? "")}</span>`;
     row.innerHTML = `
       <label>${c.label}</label>
       ${input}
@@ -60,20 +60,22 @@ export function buildControls() {
   }
 
   for (const key in CONTROLS) {
-    const c = CONTROLS[key];
-    document.getElementById(`ctrl-${key}`).addEventListener("input", e =>
-      setControl(key, c.type === "color" ? e.target.value : c.type === "checkbox" ? e.target.checked : Number(e.target.value)));
+    const c = CONTROLS[key as keyof State];
+    (document.getElementById(`ctrl-${key}`) as HTMLInputElement).addEventListener("input", e => {
+      const t = e.target as HTMLInputElement;
+      setControl(key as keyof State, c.type === "color" ? t.value : c.type === "checkbox" ? t.checked : Number(t.value));
+    });
   }
   // hex text fields (colour controls): type an exact hex; a valid 6-digit value drives the swatch + state.
-  for (const key in CONTROLS) if (CONTROLS[key].type === "color") {
-    const hx = document.getElementById(`hex-${key}`);
+  for (const key in CONTROLS) if (CONTROLS[key as keyof State].type === "color") {
+    const hx = document.getElementById(`hex-${key}`) as HTMLInputElement;
     hx.addEventListener("input", () => {
       let v = hx.value.trim(); if (v && v[0] !== "#") v = "#" + v;
-      if (/^#[0-9a-fA-F]{6}$/.test(v)) setControl(key, v.toLowerCase());
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) setControl(key as keyof State, v.toLowerCase());
     });
   }
   configEl.addEventListener("click", e => {
-    const key = e.target.dataset.key;
+    const key = (e.target as HTMLElement).dataset.key as keyof State | undefined;
     if (key) setControl(key, CONTROLS[key].default);
   });
   // Controls expand out of the bar itself. Collapsed by default -> only the url field shows; the chevron

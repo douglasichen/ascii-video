@@ -1,22 +1,19 @@
-"use strict";
-// Unit tests for js/pure.js — the REAL module the browser runs (imported here via dynamic import so a
-// refactor regression is actually caught, unlike the older benches which replicate the logic). Node, no
-// deps, plain assert, matches the bench/ style. Covers: palette ramp, contrast-LUT ORDER, grid math,
-// the 125-colour saturation cube, the music colour helpers, normalizeYouTube, embedSig determinism.
-const assert = require("assert");
-const ASCIIV = require("../asciiv-codec.js");
+import { test } from "vitest";
+import assert from "node:assert";
+// Unit tests for src/pure.ts — the REAL module the browser runs. Covers: palette ramp, contrast-LUT ORDER,
+// grid math, the 125-colour saturation cube, the music colour helpers, normalizeYouTube, embedSig determinism.
+import * as P from "../src/pure";
+import { buildPaletteCSS as codecPaletteCSS } from "../src/codec";
 
-let passes = 0;
-const ok = (c, m) => { assert.ok(c, m); passes++; };
-const eq = (a, b, m) => { assert.strictEqual(a, b, m); passes++; };
-
-(async () => {
-  const P = await import("../js/pure.js");
+test("pure.ts — palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig", () => {
+  let passes = 0;
+  const ok = (c: boolean, m: string) => { assert.ok(c, m); passes++; };
+  const eq = (a: unknown, b: unknown, m: string) => { assert.strictEqual(a, b, m); passes++; };
 
   // ── buildPaletteCSS: black -> base ramp, ≤ LEVELS colours, byte-identical to the embed codec ──────────
   for (const color of ["#ffffff", "#32cd32", "#ff00ff", "#000000", "#123456"]) {
     const css = P.buildPaletteCSS(color);
-    eq(css, ASCIIV.buildPaletteCSS(color), "buildPaletteCSS must match the codec exactly for " + color);
+    eq(css, codecPaletteCSS(color), "buildPaletteCSS must match the codec exactly for " + color);
     const colours = [...css.matchAll(/color:#([0-9a-f]{6})/g)].map(m => m[1]);
     ok(colours.length === P.LEVELS, "palette emits one rule per level (" + color + ")");
     ok(new Set(colours).size <= P.LEVELS, "≤ LEVELS distinct colours (" + color + ")");
@@ -89,15 +86,15 @@ const eq = (a, b, m) => { assert.strictEqual(a, b, m); passes++; };
     const s = { color: "#ffffff", shading: true, detail: 6, saturation: 0, contrast: 50, brightness: 50, invert: false, fade: true, maxfps: 30 };
     const baseSig = P.embedSig("vid123", s, 200, 60);
     eq(baseSig, P.embedSig("vid123", { ...s }, 200, 60), "embedSig is deterministic for identical inputs");
-    const flips = [
+    const flips: [string, () => string][] = [
       ["source", () => P.embedSig("other", s, 200, 60)],
       ["cols", () => P.embedSig("vid123", s, 201, 60)],
       ["rows", () => P.embedSig("vid123", s, 200, 61)],
-      ...["color", "shading", "detail", "saturation", "contrast", "brightness", "invert", "fade", "maxfps"].map(k =>
-        [k, () => P.embedSig("vid123", { ...s, [k]: typeof s[k] === "boolean" ? !s[k] : typeof s[k] === "number" ? s[k] + 1 : "#000000" }, 200, 60)]),
+      ...(["color", "shading", "detail", "saturation", "contrast", "brightness", "invert", "fade", "maxfps"] as const).map(k =>
+        [k, () => P.embedSig("vid123", { ...s, [k]: typeof s[k] === "boolean" ? !s[k] : typeof s[k] === "number" ? (s[k] as number) + 1 : "#000000" }, 200, 60)] as [string, () => string]),
     ];
     for (const [name, f] of flips) ok(f() !== baseSig, "embedSig changes when " + name + " changes");
   }
 
-  console.log(`PASS: js/pure.js — ${passes} assertions (palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig)`);
-})().catch(e => { console.error(e); process.exit(1); });
+  console.log(`PASS: src/pure.ts — ${passes} assertions (palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig)`);
+});

@@ -1,4 +1,4 @@
-// reactive.js — music reactivity (the `react` toggle, off by default).
+// reactive.ts — music reactivity (the `react` toggle, off by default).
 // Graph: <video> → MediaStreamAudioSource → AnalyserNode → destination (audio stays audible). Energy-based
 // beat detection on the kick band (instantaneous energy vs an adaptive mean + k·std over ~1s, refractory
 // gap); a beat kicks an envelope (env→1, exp decay) that pulses brightness/contrast + punches resolution
@@ -9,17 +9,17 @@ import { video } from "./dom.js";
 import { buildPalette, computeGrid } from "./render.js";
 import { clamp, bandAvg, hslHex, hexHue, mixHex } from "./pure.js";
 
-let audioCtx, analyser, freqData, audioReady = false;
-export function initAudio() {
+let audioCtx: AudioContext, analyser: AnalyserNode, freqData: Uint8Array, audioReady = false;
+export function initAudio(): void {
   if (audioReady) return;
   try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx = new ((window as any).AudioContext || (window as any).webkitAudioContext)();
     // Feed the analyser from a CAPTURED stream, NOT createMediaElementSource(video). The element-source
     // node PERMANENTLY reroutes the <video>'s audio into the graph, which then makes the embed bake's
     // video.captureStream().getAudioTracks() come back silent/empty — so every embed baked after music
     // mode was ever on had no sound. A MediaStreamAudioSource taps a copy and leaves the element's own
     // audio path (speakers + captureStream) completely untouched.
-    const src = audioCtx.createMediaStreamSource(video.captureStream());
+    const src = audioCtx.createMediaStreamSource((video as any).captureStream());
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                // 512 bins, ~43 Hz/bin at 44.1kHz
     analyser.smoothingTimeConstant = 0.55;  // some smoothing, but keep transients for beats
@@ -34,11 +34,12 @@ export function initAudio() {
   } catch (e) { /* no captureStream / no audio track / cross-origin (tainted) video -> reactivity stays off */ }
 }
 
-export const rx = { hist: [], env: 0, lastBeat: 0, hue: 210, bass: 0, mid: 0, treb: 0, on: false, beats: 0 };
-export function applyReactivity(now) {
+interface Rx { hist: number[]; env: number; lastBeat: number; hue: number; bass: number; mid: number; treb: number; on: boolean; beats: number; }
+export const rx: Rx = { hist: [], env: 0, lastBeat: 0, hue: 210, bass: 0, mid: 0, treb: 0, on: false, beats: 0 };
+export function applyReactivity(now: number): void {
   if (state.react && !audioReady) initAudio();
   if (!state.react || !audioReady) {
-    if (rx.on) { for (const k of DRIVEN) state[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; }
+    if (rx.on) { for (const k of DRIVEN) (state as any)[k] = base[k]; buildPalette(base.color); computeGrid(); rx.on = false; }
     return; // music off (or unavailable) → state stays exactly at the user's base values
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
@@ -84,7 +85,7 @@ export function applyReactivity(now) {
 // Audio fade in/out toward each loop's start/end (state.fade). Runs per rVFC so it tracks currentTime as
 // the loop wraps. Fade window shrinks for very short clips so the in/out never overlap.
 const FADE_SECONDS = 1.5;
-export function updateFade() {
+export function updateFade(): void {
   if (!state.fade || !isFinite(video.duration) || video.duration <= 0) { video.volume = 1; return; }
   const d = video.duration, t = video.currentTime, f = Math.min(FADE_SECONDS, d / 3);
   let v = 1;

@@ -1,5 +1,5 @@
-// audio.js — playback audio policy: autoplay with sound when the browser allows, a manual speaker toggle,
-// and unmute-on-first-gesture. (Distinct from reactive.js, which taps the audio for the FFT beat detector.)
+// audio.ts — playback audio policy: autoplay with sound when the browser allows, a manual speaker toggle,
+// and unmute-on-first-gesture. (Distinct from reactive.ts, which taps the audio for the FFT beat detector.)
 //
 // Play WITH sound by default, never force-mute on our own. Reality check (verified 2026 against
 // Chrome/Safari/Firefox autoplay docs): zero-gesture unmuted autoplay is NOT possible on a first visit —
@@ -14,14 +14,14 @@ import { video, audioBtn, soundcue, IS_MOBILE } from "./dom.js";
 let userMuted = false;  // the user's explicit choice via the speaker button — the ONLY thing that silences us
 let activated = false;  // page has received a real user gesture (which lets the browser grant unmuted play)
 
-export function syncAudio() {
+export function syncAudio(): void {
   audioBtn.classList.toggle("muted", video.muted);
   // Cue shows only while we're silently muted awaiting a gesture — not when the user chose to mute.
   soundcue.style.display = (video.muted && !userMuted && document.body.classList.contains("playing")) ? "block" : "none";
 }
 // Set audio to the desired state (sound unless the user muted). If the browser refuses unmuted autoplay,
 // downgrade to muted so playback still starts; a later gesture (or the 'playing' retry) brings sound in.
-export function applyAudio() {
+export function applyAudio(): void {
   video.muted = userMuted;
   syncAudio();
   video.play().catch(() => {
@@ -33,21 +33,22 @@ export function applyAudio() {
 // user-activation events, capture phase so nothing can swallow it, first one wins then all are removed.
 // The speaker button manages its own mute, so ignore gestures on it here.
 const GESTURE_EVENTS = ["pointerdown", "pointerup", "click", "keydown", "touchstart", "touchend"];
-function onFirstGesture(e) {
-  if (e && e.target && e.target.closest && e.target.closest("#audio")) return;
+function onFirstGesture(e: Event): void {
+  const t = e && (e.target as Element | null);
+  if (t && t.closest && t.closest("#audio")) return;
   activated = true;
   GESTURE_EVENTS.forEach(ev => document.removeEventListener(ev, onFirstGesture, true));
   if (!userMuted && video.muted) applyAudio(); // unmute now; if the clip isn't loaded yet, 'playing' retries
 }
 
-export function bindAudio() {
+export function bindAudio(): void {
   // iOS SUSPENDS a display:none / opacity:0 <video> after a few seconds (the "plays then freezes", which
   // also kills its audio). The is-mobile class makes it full-frame + actually rendered (opacity 1) but
   // hidden behind an opaque cover, which iOS treats as visible so it keeps decoding. Also opt into the
   // "playback" audio session so sound ignores the hardware silent switch (iOS 16.4+). Desktop: none of this.
   if (IS_MOBILE) {
     document.body.classList.add("is-mobile");
-    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* older iOS */ }
+    try { if ((navigator as any).audioSession) (navigator as any).audioSession.type = "playback"; } catch { /* older iOS */ }
   }
   // Speaker button = manual override, both directions. Records the explicit choice so new loads respect it.
   audioBtn.addEventListener("click", () => {
@@ -65,7 +66,7 @@ export function bindAudio() {
   });
   // Live mobile debug readout (add ?debug=1) so device-only issues can be reported precisely.
   if (new URLSearchParams(location.search).has("debug")) {
-    const el = document.getElementById("mdbg"); el.style.display = "block";
+    const el = document.getElementById("mdbg") as HTMLElement; el.style.display = "block";
     setInterval(() => { el.textContent =
       `mob=${IS_MOBILE} muted=${video.muted} paused=${video.paused} t=${(video.currentTime || 0).toFixed(1)} rs=${video.readyState} playing=${document.body.classList.contains("playing")}`; }, 300);
   }

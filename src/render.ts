@@ -1,6 +1,6 @@
-// render.js — the rendering pipeline: video → sample → grid → ASCII markup → DOM text, plus the
+// render.ts — the rendering pipeline: video → sample → grid → ASCII markup → DOM text, plus the
 // requestVideoFrameCallback loop and the DEBUG fps profiler. The byte-exact per-frame maths lives in
-// pure.js (buildFrameHTML / buildContrastLUT / gridDims / the palette+cube CSS); this module is the thin
+// pure.ts (buildFrameHTML / buildContrastLUT / gridDims / the palette+cube CSS); this module is the thin
 // DOM glue around it (drawImage/getImageData, <style> updates, innerHTML/textContent). See CLAUDE.md for
 // why span/run count — not per-pixel math — is the render's bottleneck, and why output is DOM text (crisp
 // at any zoom) not canvas glyphs.
@@ -12,12 +12,17 @@ import { video, screen, canvas, ctx, bar, fpsEl } from "./dom.js";
 import { applyReactivity, updateFade } from "./reactive.js";
 import { setComputing, stopLoader } from "./sources.js";
 
+// Per-frame timings paint() returns so the loop can profile (draw / build / dom phase durations, ms).
+interface Timings { d: number; b: number; dom: number; }
+// The rVFC metadata fields we read (a minimal shape — the full VideoFrameCallbackMetadata isn't in every lib).
+interface FrameMeta { presentedFrames: number; mediaTime: number; }
+
 // contrast curve, rebuilt per frame (256 entries is nothing next to the pixel loop). Uint8Clamped rounds+clamps for free.
 const CONTRAST_LUT = new Uint8ClampedArray(256);
 // One <style> holding the per-level colours; rebuilt whenever the base colour changes (buildPalette).
 const quantStyle = document.head.appendChild(document.createElement("style"));
 
-export function computeGrid() {
+export function computeGrid(): void {
   if (!video.videoWidth) return;
   // Freeze the grid while baking an embed. recFrames are captured at the CURRENT cols*rows and the header
   // stores ONE cols/rows for the whole file; if anything (music reactivity's res-punch, a resize, a control
@@ -39,7 +44,7 @@ export function computeGrid() {
 
 // Level i ramps black (i=0) -> the base colour (i=LEVELS-1); base white = the classic gray ramp. Also sets
 // #screen's flat colour for turbo (shading-off) mode. The CSS string is built in pure.buildPaletteCSS.
-export function buildPalette(color) {
+export function buildPalette(color: string): void {
   quantStyle.textContent = buildPaletteCSS(color);
   screen.style.color = color; // turbo mode's flat text colour
 }
@@ -47,7 +52,7 @@ export function buildPalette(color) {
 // Sample the current video frame and rebuild the ASCII at the CURRENT cols/rows. Split out of the loop so
 // a control change can re-render on demand (see setControl) — the loop is the only *other* caller. Returns
 // the per-phase timings so the loop can profile; callers that just want a refresh ignore them.
-export function paint() {
+export function paint(): Timings {
   const tDraw = performance.now();
   ctx.drawImage(video, 0, 0, rt.cols, rt.rows);
   const data = ctx.getImageData(0, 0, rt.cols, rt.rows).data;
@@ -77,21 +82,23 @@ let lastRender = -1e9;
 // rebuilt 2-4x per frame for identical output. requestVideoFrameCallback fires exactly per new frame ->
 // halves+ the build/dom/getImageData work and the GC that rides on it. Re-registers itself (always, even
 // when the work is skipped) so it self-heals across pause/resume. rAF is the fallback.
-export function scheduleFrame() {
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(renderFrame);
-  else requestAnimationFrame(renderFrame);
+export function scheduleFrame(): void {
+  const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, metadata: FrameMeta) => void) => number };
+  if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(renderFrame);
+  else requestAnimationFrame((now) => renderFrame(now));
 }
 
 // Ranked list of the worst frames since load, worst -> best. Lives on window (set in initRenderStyles) so
 // it survives and can be dumped on demand. Loop-wrap frames are excluded. Click #fps to reset the list.
+interface WorstRec { ms: number; d: number; b: number; dom: number; grid: string; at: number; }
 const WORST_N = 20;
-const worst = [];
-function logWorst() {
+const worst: WorstRec[] = [];
+function logWorst(): void {
   console.log("[WORST] top " + worst.length + " frames (worst→best):\n" + worst.map((w, i) =>
     `${String(i + 1).padStart(2)}. ${w.ms.toFixed(0).padStart(3)}ms  d${w.d.toFixed(1)} b${w.b.toFixed(1)} dom${w.dom.toFixed(1)}  ${w.grid} @${w.at}ms`).join("\n"));
 }
 
-function renderFrame(now, metadata) {
+function renderFrame(now: number, metadata?: FrameMeta): void {
   if (metadata) lastPresented = metadata.presentedFrames; // count video frames even on skipped renders, so "drop" stays honest
   if (!video.paused) updateFade();
   if (!video.paused && !video.ended && rt.rows && now - lastRender >= 1000 / state.maxfps - FRAME_JITTER) {
@@ -141,10 +148,10 @@ function renderFrame(now, metadata) {
 // One-time DOM/style setup, called from main after all modules are evaluated. Builds the initial palette,
 // injects the fixed 125-colour cube <style>, and wires the debug conveniences (window.WORST/dumpWorst +
 // the #fps click-to-reset).
-export function initRenderStyles() {
+export function initRenderStyles(): void {
   buildPalette(state.color);
   document.head.appendChild(document.createElement("style")).textContent = buildColorCubeCSS();
-  window.WORST = worst;
-  window.dumpWorst = logWorst;
+  (window as any).WORST = worst;
+  (window as any).dumpWorst = logWorst;
   fpsEl.addEventListener("click", () => { worst.length = 0; console.log("[WORST] reset"); });
 }

@@ -1,5 +1,7 @@
 current.mp4
 videoplayback.html
+node_modules/
+dist/
 __pycache__/
 *.pyc
 .venv/

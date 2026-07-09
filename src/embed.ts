@@ -1,20 +1,21 @@
-// embed.js — the "save" CTA: bake the currently-playing clip into a self-contained .asciiv on S3 and hand
+// embed.ts — the "save" CTA: bake the currently-playing clip into a self-contained .asciiv on S3 and hand
 // back an <iframe> snippet. Key idea: the S3 key is a CONTENT HASH known BEFORE baking (source + exact
 // render settings, see pure.embedSig), so we can show the snippet instantly and bake in the background, and
-// an identical source+look is never re-baked (cache/dedup). Uses the shared codec at window.ASCIIV
-// (asciiv-codec.js, loaded as a classic script before this module). See CLAUDE.md "Baked embeds".
+// an identical source+look is never re-baked (cache/dedup). Uses the shared codec (src/codec.ts). See
+// CLAUDE.md "Baked embeds".
 import { embedBtn, embedWrap, embedCode, video } from "./dom.js";
 import { state, rt } from "./state.js";
 import { embedSig } from "./pure.js";
+import { encodeAsciiv, type EncodeHeader } from "./codec.js";
 
-const fmt = s => { s = Math.max(0, Math.round(s)); return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
+const fmt = (s: number): string => { s = Math.max(0, Math.round(s)); return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
 
 // The background bake/upload is a backend detail — deliberately NOT surfaced in the modal. The snippet is
 // handed over immediately; if a viewer loads the embed before it finishes, embed.html shows its own
 // "ascii video will be here soon!" placeholder. So this is a no-op (calls left in place, intentionally silent).
-function setEmbedStat() {}
+function setEmbedStat(_msg?: string): void {}
 
-async function sha256hex(bytes) {
+async function sha256hex(bytes: Uint8Array): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
@@ -24,7 +25,7 @@ async function sha256hex(bytes) {
 // caching: the key is known BEFORE baking (baking is a full real-time loop, unavoidably slow), so we can
 // show the snippet now and bake in the background; and an identical source+look hashes to the same key, so
 // it's never re-baked.
-async function embedHash() {
+async function embedHash(): Promise<string> {
   const sig = embedSig(rt.currentSourceId, state, rt.cols, rt.rows);
   const src = rt.currentFile
     ? (await sha256hex(new Uint8Array(await rt.currentFile.arrayBuffer()))) + sig
@@ -35,14 +36,14 @@ async function embedHash() {
 // Click -> compute the key -> show the snippet IMMEDIATELY (the link 404s until the bake lands; the embed
 // page shows "ascii video will be here soon!" and polls). Then: if the server already has this key we're
 // done (cached); otherwise bake + upload in the background so the button never blocks on the ~real-time loop.
-async function startBake() {
+async function startBake(): Promise<void> {
   if (!video.videoWidth || rt.baking) return;
   embedBtn.disabled = true;
   try {
     const hash = await embedHash();
     showSnippet(hash + ".asciiv"); // instant
     setEmbedStat("preparing…"); // clear any stale status from a previous save
-    let save;
+    let save: any;
     try {
       save = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hash }) }).then(r => r.json());
@@ -58,14 +59,14 @@ async function startBake() {
 // Records exactly one loop from wherever the video is now (it keeps looping, so audio + frames wrap
 // seamlessly), encodes to .asciiv, and uploads to the presigned key. Runs while the snippet is already
 // shown, so its real-time cost is off the click path.
-async function bakeInBackground(upload) {
+async function bakeInBackground(upload: any): Promise<void> {
   rt.baking = true;
   document.body.classList.add("baking"); // opaque cover over the live player while we seek+scrub it to capture
   const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
   setEmbedStat(`generating… your embed goes live in about ${fmt(dur)}`);
-  let mr = null; const audioChunks = [];
+  let mr: MediaRecorder | null = null; const audioChunks: Blob[] = [];
   try {
-    const stream = video.captureStream ? video.captureStream() : null;
+    const stream: MediaStream | null = (video as any).captureStream ? (video as any).captureStream() : null;
     const at = stream ? stream.getAudioTracks() : [];
     if (window.MediaRecorder && at.length) {
       mr = new MediaRecorder(new MediaStream(at));
@@ -100,7 +101,7 @@ async function bakeInBackground(upload) {
     // fallback so a browser that never fires `seeked` can't hang the bake. Skip when already at/near 0 or the
     // duration isn't seekable (live stream). The live player just continues from 0 afterward — it's looping.
     if (isFinite(video.duration) && video.currentTime > 0.05) {
-      await new Promise(res => {
+      await new Promise<void>(res => {
         let done = false;
         const finish = () => { if (done) return; done = true; video.removeEventListener("seeked", finish); res(); };
         video.addEventListener("seeked", finish);
@@ -117,7 +118,7 @@ async function bakeInBackground(upload) {
     // opening span is still excluded and rVFC-starved frames don't bake a gap.
     if (document.hidden) { hiddenSince = rt.recStart; if (mr && mr.state === "recording") mr.pause(); }
     rt.recording = true;
-    await new Promise(res => {
+    await new Promise<void>(res => {
       const t0 = performance.now();
       const iv = setInterval(() => {
         const el = (performance.now() - t0 - rt.recPausedMs - (hiddenSince ? performance.now() - hiddenSince : 0)) / 1000;
@@ -126,8 +127,8 @@ async function bakeInBackground(upload) {
       }, 200);
     });
     rt.recording = false;
-    let audioBlob = null;
-    if (mr) audioBlob = await new Promise(res => { mr.onstop = () => res(new Blob(audioChunks, { type: mr.mimeType || "audio/webm" })); mr.stop(); });
+    let audioBlob: Blob | null = null;
+    if (mr) audioBlob = await new Promise<Blob>(res => { mr!.onstop = () => res(new Blob(audioChunks, { type: mr!.mimeType || "audio/webm" })); mr!.stop(); });
     if (!rt.recFrames.length) throw new Error("no frames captured");
     setEmbedStat("encoding…");
     const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
@@ -135,19 +136,19 @@ async function bakeInBackground(upload) {
     // times[] = each frame's real capture instant (ms from recStart); durationMs = the FULL recording span
     // (the loop period), so the last frame holds until the loop wraps in lockstep with the ~dur-long audio.
     const times = rt.recTimes.map(t => Math.round(t));
-    const header = { fps, cols: rt.cols, rows: rt.rows, colour: state.color, shading: state.shading, fade: state.fade,
+    const header: EncodeHeader = { fps, cols: rt.cols, rows: rt.rows, colour: state.color, shading: state.shading, fade: state.fade,
                      durationMs: Math.round(dur * 1000), times, audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
-    const bytes = await window.ASCIIV.encodeAsciiv(header, rt.recFrames, audio);
+    const bytes = await encodeAsciiv(header, rt.recFrames, audio);
     rt.recFrames = []; rt.recTimes = []; // free memory early
     setEmbedStat("uploading…");
     const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
-    Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v));
+    Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v as string));
     fd.append("file", new Blob([bytes], { type: "application/octet-stream" }));
     const up = await fetch(upload.url, { method: "POST", body: fd });
     if (!up.ok) throw new Error("upload failed (" + up.status + ")");
     setEmbedStat("✓ your embed is live");
   } catch (e) {
-    setEmbedStat("couldn’t finish generating — " + (e.message || "try again"));
+    setEmbedStat("couldn’t finish generating — " + ((e as Error).message || "try again"));
   } finally {
     document.removeEventListener("visibilitychange", onVis);
     document.body.classList.remove("baking");
@@ -156,25 +157,25 @@ async function bakeInBackground(upload) {
   }
 }
 
-function showSnippet(key) {
+function showSnippet(key: string): void {
   const src = location.origin + "/embed.html?id=" + encodeURIComponent(key);
   embedCode.value = `<iframe src="${src}" width="640" height="360" allow="autoplay" style="border:0"></iframe>`;
   embedWrap.hidden = false;
   embedCode.focus(); embedCode.select();
 }
 
-export function bindEmbed() {
+export function bindEmbed(): void {
   embedBtn.addEventListener("click", startBake);
-  document.getElementById("embedcopy").addEventListener("click", () => {
+  (document.getElementById("embedcopy") as HTMLButtonElement).addEventListener("click", () => {
     embedCode.select();
     if (navigator.clipboard) navigator.clipboard.writeText(embedCode.value);
-    const b = document.getElementById("embedcopy"); b.textContent = "copied"; setTimeout(() => (b.textContent = "copy"), 1200);
+    const b = document.getElementById("embedcopy") as HTMLButtonElement; b.textContent = "copied"; setTimeout(() => (b.textContent = "copy"), 1200);
   });
   // Close returns you to the player. Also drop the baking cover: it only exists to hide the seek/scrub behind
   // the snippet card, so once the card is dismissed there's nothing to cover — the bake finishes in the
   // background (the "playing" event / finally still fire). Without this you'd close the card onto the opaque
   // "generating your embed…" screen instead of your clip.
-  document.getElementById("embedclose").addEventListener("click", () => {
+  (document.getElementById("embedclose") as HTMLButtonElement).addEventListener("click", () => {
     embedWrap.hidden = true;
     document.body.classList.remove("baking");
   });

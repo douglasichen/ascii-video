@@ -1,28 +1,27 @@
-"use strict";
+import { test } from "vitest";
+import assert from "node:assert";
 // Golden render guard — the strongest regression lock for the "behaviour-preserving refactor". Imports the
-// REAL hot loop (js/pure.js buildFrameHTML — the exact code index.html's paint() calls) and asserts, across
+// REAL hot loop (src/pure.ts buildFrameHTML — the exact code index.html's paint() calls) and asserts, across
 // a matrix of settings + synthetic frames, that:
 //   (1) the sat=0 gray path is BYTE-IDENTICAL to buildBaseline() — the pre-refactor paint() build that the
-//       existing render-bench.js already trusts. Locks the shipped look (shading on AND off).
+//       original render-bench already trusted. Locks the shipped look (shading on AND off).
 //   (2) output is STABLE (deterministic: same input -> same bytes).
 //   (3) sat>0 emits only valid cube classes k0..k124, and its VISIBLE characters match the gray path
 //       (saturation only recolours; it must never change which glyph a cell gets).
-//   (4) the captured char-indices feed asciiv-codec.buildRows to the SAME characters (embed<->live agree on
+//   (4) the captured char-indices feed codec.buildRows to the SAME characters (embed<->live agree on
 //       glyphs; the colour level is re-derived in the embed and may differ, which is by design).
-// Node, no deps, plain assert.
-const assert = require("assert");
-const ASCIIV = require("../asciiv-codec.js");
-const { makeFrame, makeClut, buildBaseline } = require("./render-bench.js");
+import * as P from "../src/pure";
+import { buildRows } from "../src/codec";
+import { makeFrame, makeClut, buildBaseline } from "./helpers";
 
-let passes = 0;
-const ok = (c, m) => { assert.ok(c, m); passes++; };
-const eq = (a, b, m) => { assert.strictEqual(a, b, m); passes++; };
-const stripTags = (html) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the glyph + newline stream
+const stripTags = (html: string) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the glyph + newline stream
 
-(async () => {
-  const P = await import("../js/pure.js");
+test("golden render — buildFrameHTML byte-identical to baseline, stable, cube-valid, codec glyphs agree", () => {
+  let passes = 0;
+  const ok = (c: boolean, m: string) => { assert.ok(c, m); passes++; };
+  const eq = (a: unknown, b: unknown, m: string) => { assert.strictEqual(a, b, m); passes++; };
 
-  const GRIDS = [[120, 40], [200, 60]];
+  const GRIDS: [number, number][] = [[120, 40], [200, 60]];
   const CLUTS = [
     makeClut(50, 50, false),  // neutral
     makeClut(0, 50, false),   // min contrast
@@ -37,7 +36,7 @@ const stripTags = (html) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the 
   const NFRAMES = 8;
 
   for (const [cols, rows] of GRIDS) {
-    const frames = [];
+    const frames: Uint8ClampedArray[] = [];
     for (let f = 0; f < NFRAMES; f++) frames.push(makeFrame(cols, rows, f));
 
     for (const clut of CLUTS) {
@@ -59,8 +58,8 @@ const stripTags = (html) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the 
         // (4) captured char-indices -> codec buildRows produces the SAME glyphs as the live gray path
         const rec = new Uint8Array(cols * rows);
         const grayHtml = P.buildFrameHTML(fr, cols, rows, { shading: true, saturation: 0, color: "#ffffff" }, clut, rec);
-        eq(stripTags(ASCIIV.buildRows(rec, cols, rows, true)), stripTags(grayHtml), "codec buildRows glyphs match the live gray path");
-        eq(stripTags(ASCIIV.buildRows(rec, cols, rows, false)), stripTags(grayHtml), "codec buildRows (turbo) glyphs match too");
+        eq(stripTags(buildRows(rec, cols, rows, true)), stripTags(grayHtml), "codec buildRows glyphs match the live gray path");
+        eq(stripTags(buildRows(rec, cols, rows, false)), stripTags(grayHtml), "codec buildRows (turbo) glyphs match too");
 
         // (3) saturation path: valid cube classes only, glyphs unchanged vs gray
         for (const color of COLORS) {
@@ -76,4 +75,4 @@ const stripTags = (html) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the 
   }
 
   console.log(`PASS: golden render — ${passes} assertions (byte-identical baseline, stability, cube validity, codec glyph agreement)`);
-})().catch(e => { console.error(e); process.exit(1); });
+});

@@ -49,55 +49,96 @@ base64-embedded audio track.
 
 ## Architecture: the live player's rendering pipeline
 
-`index.html` holds the markup + `<style>`; the JS is split into plain ES
-modules under `js/` (no build step, no framework, no bundler — Vercel serves
-the `.js` files statically). The page loads exactly two scripts: the classic
-`asciiv-codec.js` (sets `window.ASCIIV`) then `<script type="module"
-src="/js/main.js">`. Pipeline, in order: **video → contrast/brightness/invert
-filter → luminance → quantized level → ASCII character → tinted DOM text**.
+`index.html` + `embed.html` hold the markup + `<style>`; the JS is **TypeScript
+under `src/`, bundled by Vite** (multi-page: `index.html` served at `/`,
+`embed.html` at `/embed.html`). `index.html` loads exactly one entry —
+`<script type="module" src="/src/main.ts">`; `embed.html` loads
+`<script type="module" src="/src/embed-page.ts">`. Both import the shared codec
+from `./codec` (a normal module — no more `window.ASCIIV` global). Pipeline, in
+order: **video → contrast/brightness/invert filter → luminance → quantized
+level → ASCII character → tinted DOM text**.
 
-### Module layout (`js/`)
+### Build / dev / test (Vite + TypeScript + Vitest)
 
-- **`js/pure.js`** — the DOM-free core, imported by the browser modules AND by
-  the Node tests (so a refactor regression is actually caught). Owns the
-  byte-exact hot loop (`buildFrameHTML`), the quantization tables
-  (`QUANT_LEVEL`/`LEVEL_CLASS`, the `CQ` cube), `buildContrastLUT` (contrast→
-  invert→brightness order), `gridDims`/`fontPxFor`, `buildPaletteCSS`/
-  `buildColorCubeCSS`, the music colour helpers (`hslHex`/`hexHue`/`mixHex`/
-  `clamp`/`bandAvg`), `normalizeYouTube`, and `embedSig`. **No `document`/
-  `window`** — keep it that way so it stays node-importable.
-- **`js/state.js`** — `CONTROLS`, `state`/`base`, `DRIVEN`, and the `rt`
-  runtime object. **Shared-mutable-state pattern:** ES-module imports are
-  read-only in importers (you can't reassign an imported `let`), so every
-  reassignable shared primitive (`cols`, `rows`, `recording`, `recFrames`,
-  `recStart`, `computing`, `firstPaintPending`, `currentFile`, …) lives on `rt`
-  and is mutated in place (`rt.cols = …`). `state`/`base` are mutated-in-place
-  objects, exported directly. A leaf module (imports nothing).
-- **`js/dom.js`** — cached `getElementById` refs + `IS_MOBILE`.
-- **`js/render.js`** — the DOM glue around `pure.js`: `computeGrid`,
+- `npm run dev` — Vite dev server for the two static pages. **For the full
+  local stack** (incl. the Python `/api/resolve` + `/api/save` functions) run
+  `vercel dev`. `python3 server.py` is the older standalone yt-dlp
+  same-origin-download helper (serves `index.html` too), kept for that path.
+- `npm run build` — `vite build` → `dist/` (emits `dist/index.html` AND
+  `dist/embed.html`, each with hashed, self-contained JS bundles; the codec is a
+  shared chunk both pages import). `npm run preview` serves `dist/`.
+- `npm run typecheck` — `tsc --noEmit` (strict, `moduleResolution: bundler`).
+- `npm test` — `vitest run` (tests live in `tests/`, DOM-free, importing the
+  REAL `src/*.ts` so a refactor regression is actually caught).
+- Config: `package.json`, `tsconfig.json`, `vite.config.ts` (the multi-page
+  `rollupOptions.input`). `node_modules/` + `dist/` are git/vercel-ignored.
+
+### Module layout (`src/`)
+
+- **`src/pure.ts`** — the DOM-free core, imported by the browser modules AND by
+  the Vitest tests. Owns the byte-exact hot loop (`buildFrameHTML`), the
+  quantization tables (`QUANT_LEVEL`/`LEVEL_CLASS`, the `CQ` cube),
+  `buildContrastLUT` (contrast→invert→brightness order), `gridDims`/`fontPxFor`,
+  `buildPaletteCSS`/`buildColorCubeCSS`, the music colour helpers (`hslHex`/
+  `hexHue`/`mixHex`/`clamp`/`bandAvg`), `normalizeYouTube`, and `embedSig`.
+  **No `document`/`window`** — keep it that way so it stays node-importable.
+- **`src/codec.ts`** — the shared `.asciiv` codec (was the standalone
+  `asciiv-codec.js`): `encodeAsciiv`/`decodeAsciiv`/`buildRows`/`buildPaletteCSS`/
+  `validHeader`/`frameAt`. Imported by `embed.ts` (encode) AND `embed-page.ts`
+  (decode) so the baked and live players can never drift. Node-runnable
+  (CompressionStream/Response exist in Node 18+) so the format round-trips in a
+  headless test.
+- **`src/state.ts`** — `CONTROLS`, `state`/`base`, `DRIVEN`, and the `rt`
+  runtime object, plus the `ControlDef`/`State`/`Rt` interfaces.
+  **Shared-mutable-state pattern:** ES-module imports are read-only in importers
+  (you can't reassign an imported `let`), so every reassignable shared primitive
+  (`cols`, `rows`, `recording`, `recFrames`, `recStart`, `computing`,
+  `firstPaintPending`, `currentFile`, …) lives on `rt` and is mutated in place
+  (`rt.cols = …`). `state`/`base` are typed by the `State` interface (so
+  `state.detail` is a `number`, `state.color` a `string`) and mutated in place.
+  A leaf module (imports nothing).
+- **`src/dom.ts`** — cached, typed `getElementById` refs + `IS_MOBILE`.
+- **`src/render.ts`** — the DOM glue around `pure.ts`: `computeGrid`,
   `buildPalette`, `paint()` (draw→build→dom), the rVFC `renderFrame`/
   `scheduleFrame` loop, the fps profiler, `initRenderStyles`.
-- **`js/reactive.js`** — music reactivity (`initAudio`, `applyReactivity`, the
+- **`src/reactive.ts`** — music reactivity (`initAudio`, `applyReactivity`, the
   beat detector, `updateFade`, `rx`).
-- **`js/audio.js`** — playback audio policy (`applyAudio`/`syncAudio`, the
+- **`src/audio.ts`** — playback audio policy (`applyAudio`/`syncAudio`, the
   speaker toggle, gesture-to-unmute; `userMuted`/`activated` are module-local).
-- **`js/controls.js`** — the control-panel builder (`buildControls`) + `setControl`.
-- **`js/sources.js`** — `loadInput`/`loadFile`/`loadYouTube`/`playSrc`, the
+- **`src/controls.ts`** — the control-panel builder (`buildControls`) + `setControl`.
+- **`src/sources.ts`** — `loadInput`/`loadFile`/`loadYouTube`/`playSrc`, the
   loader overlay, and the `computing` concurrency guard (`setComputing`).
-- **`js/embed.js`** — the save CTA: `embedHash`/`startBake`/`bakeInBackground`/
-  `showSnippet` (uses `window.ASCIIV`).
-- **`js/main.js`** — the only entry point in the HTML: imports the rest, runs
-  each module's init, binds the cross-cutting events (resize, load/confirm,
+- **`src/embed.ts`** — the save CTA: `embedHash`/`startBake`/`bakeInBackground`/
+  `showSnippet` (imports `encodeAsciiv` from `./codec`).
+- **`src/main.ts`** — the only entry point in `index.html`: imports the rest,
+  runs each module's init, binds the cross-cutting events (resize, load/confirm,
   drag-drop, keyboard, feedback, beforeunload), then kicks the render loop and
   the default clip. Circular imports between render/reactive/sources/controls
   are fine because no module calls an imported function at top-level
   evaluation — only inside functions run later, after main's init.
-- Regression tests import the real `js/pure.js`: `bench/golden-render-check.js`
-  (locks `buildFrameHTML` byte-identical to the trusted baseline across a
-  settings matrix) and `bench/pure-check.js` (palette / LUT order / grid / cube
-  / colour helpers / `normalizeYouTube` / `embedSig`). `js/package.json`
-  (`{"type":"module"}`) only marks the dir ESM for Node — it's `.vercelignore`d
-  since the browser reads module-ness off the `<script type=module>` tag.
+- **`src/embed-page.ts`** — the embed player, `embed.html`'s entry: fetch the
+  baked `.asciiv` from S3 by `?id=`, `decodeAsciiv`, play the ascii against the
+  embedded audio.
+- **Strict-mode typing notes:** messy DOM/WebAudio/MediaRecorder APIs that are
+  disproportionate to type precisely are narrowed with a commented `any`
+  (e.g. `webkitAudioContext`, `video.captureStream()`, `navigator.audioSession`,
+  the rVFC callback metadata, `window.WORST`). `pure.ts`/`codec.ts` are fully
+  typed. The dynamic string-keyed writes to the precisely-typed `state`/`base`
+  go through a `Record<string, unknown>` view.
+- **Tests (`tests/`, Vitest, DOM-free, import the real `src/`):**
+  `golden-render.test.ts` (locks `buildFrameHTML` byte-identical to the trusted
+  baseline in `tests/helpers.ts` across a settings matrix — the behaviour-
+  preservation lock), `pure.test.ts` (palette / LUT order / grid / cube / colour
+  helpers / `normalizeYouTube` / `embedSig`), `embed.test.ts` (codec round-trip +
+  `validHeader`/decode fail-closed + capture-size invariant + playback phase +
+  timestamp `frameAt`), `color.test.ts` (saturation sat=0 byte-match + cube run
+  ratio), `bake-hidden.test.ts` + `bake-startframe.test.ts` (the bake guards).
+  `tests/helpers.ts` is the trusted baseline + synthetic frame generators (ported
+  from the old `bench/render-bench.js`/`color-check.js`). The old
+  measurement-only benches (`render-bench`/`color-bench`/`variants`) were perf
+  harnesses with no assertions; their one load-bearing assertion — the shipped
+  build variant equals the baseline byte-for-byte — is covered by
+  `golden-render.test.ts`. `tests/test_api.py` stays (Python, run separately).
 
 - An offscreen `<canvas id="sample">` is the *only* canvas — it exists
   solely to call `drawImage(video, ...)` and `getImageData()` to sample the
@@ -121,8 +162,8 @@ filter → luminance → quantized level → ASCII character → tinted DOM text
   to 8 because it roughly halves the span count with banding still hidden by
   the char ramp — span count is the render's bottleneck.) Raw per-cell RGB *from
   the video* stays removed because independent 8-bit channels give ~16M possible
-  colours, which shatters the merge (~4.3× more spans, measured in
-  `bench/color-bench.js`) and tanks FPS. But a single user-chosen **base colour**
+  colours, which shatters the merge (~4.3× more spans, measured by the old
+  color-bench harness) and tanks FPS. But a single user-chosen **base colour**
   is free: `buildPalette()` ramps the 8 level classes from black → that colour
   (white = the classic gray ramp), so it's still ≤ 8 colours/frame and merging is
   untouched. It rebuilds that one `<style>` on change and sets `#screen.style.color`
@@ -137,7 +178,7 @@ filter → luminance → quantized level → ASCII character → tinted DOM text
   static CSS class (`.k123{color:#rrggbb}`, built once in a `<style>`), so a cell
   emits `<i class=k123>` — same short class-based markup as the gray levels, not
   inline styles. `saturation`=0 uses the untouched 8-level gray path (byte-identical
-  to before, asserted in `bench/color-check.js`); >0 mixes each channel from the
+  to before, asserted in `tests/color.test.ts`); >0 mixes each channel from the
   **base-colour-tinted gray** toward the source colour by `sat/100`, then snaps to
   the cube. Base colour and saturation **combine** (not mutually exclusive): at any
   saturation the chosen colour still tints the low end, and the mix rides up toward
@@ -148,9 +189,10 @@ filter → luminance → quantized level → ASCII character → tinted DOM text
   array and `join()`-ing. V8 builds it as a rope and flattens once at assignment,
   which skips both the per-cell `push` and the join — ~68% less build time and
   ~4× lower worst-frame (the old array path GC-spiked to 7–10 ms; this holds ~2 ms)
-  on byte-identical output. Measured by `bench/render-bench.js` (a headless node
-  harness that replays the exact build loop on synthetic frames and asserts the
-  HTML is unchanged). Other hot-loop specifics: the
+  on byte-identical output. (The ~68%/~4× perf deltas were measured by the old
+  render-bench harness; the byte-identity that lock depended on is now asserted by
+  `tests/golden-render.test.ts` against the trusted baseline in `tests/helpers.ts`.)
+  Other hot-loop specifics: the
   offscreen canvas uses `willReadFrequently:true` (CPU-backed, avoids
   GPU-readback stalls on `getImageData`); a per-frame 256-entry contrast LUT
   replaces per-pixel `adjustContrast` calls; colors are compared as the
@@ -279,11 +321,15 @@ Progress shows in the modal's `#embedstat`, not by blocking the button.
 ## Deployment (Vercel)
 
 Implements `docs/superpowers/specs/2026-07-05-vercel-migration-design.md`.
-Structure: `index.html` (static, served at `/`), `api/resolve.py` (Python
-serverless function at `/api/resolve`), `requirements.txt` (`yt-dlp`),
-`.vercelignore` (keeps `server.py`/`ascii_video.py`/artifacts out of the
-deploy). Zero-config — no `vercel.json`. Deploy with `vercel` / `vercel --prod`
-(needs `vercel login` first).
+Structure: **Vercel auto-detects Vite** and runs `vite build` → `dist/`
+(`index.html` at `/`, `embed.html` at `/embed.html`, hashed JS bundles), while
+still running `api/*.py` as Python serverless functions (`/api/resolve`,
+`/api/save`, `/api/feedback`); `requirements.txt` (`yt-dlp`, `boto3`) drives the
+Python deps. `.vercelignore` keeps `server.py`/`ascii_video.py`/`tests/`/
+artifacts out of the upload. **Still zero-config — no `vercel.json` needed**: the
+Vite framework preset already produces `dist/` as the static output AND leaves
+`api/*.py` as functions, so the multi-page + Python combo works on auto-detection
+alone. Deploy with `vercel` / `vercel --prod` (needs `vercel login` first).
 
 Input sources (`loadInput()` dispatches by type): a **video file** (drag-drop
 or ↑ upload) plays as a same-origin blob URL — the reliable path on any host,

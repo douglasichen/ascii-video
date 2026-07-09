@@ -1,4 +1,4 @@
-// main.js — the only entry point in index.html (`<script type="module" src="/js/main.js">`). Imports the
+// main.ts — the only entry point in index.html (`<script type="module" src="/src/main.ts">`). Imports the
 // other modules, runs their one-time init in the same order the old inline script did, binds the remaining
 // cross-cutting events (resize, load/confirm, drag-drop, keyboard, feedback, beforeunload), then kicks the
 // render loop and the default clip. See CLAUDE.md "Module layout" for what each module owns.
@@ -29,22 +29,22 @@ window.addEventListener("resize", () => {
 
 // If a clip is already playing, confirm before replacing it. guardLoad defers the actual load until the
 // user accepts the "load a new video?" dialog; with nothing playing it loads straight away.
-let pendingLoad = null;
-function guardLoad(action) {
+let pendingLoad: (() => void) | null = null;
+function guardLoad(action: () => void): void {
   if (document.body.classList.contains("playing")) { pendingLoad = action; confirmWrap.hidden = false; }
   else action();
 }
-document.getElementById("confirmyes").addEventListener("click", () => { confirmWrap.hidden = true; const a = pendingLoad; pendingLoad = null; if (a) a(); });
-document.getElementById("confirmno").addEventListener("click", () => { confirmWrap.hidden = true; pendingLoad = null; });
-document.getElementById("load").addEventListener("click", () => guardLoad(() => loadInput(urlInput.value)));
-urlInput.addEventListener("keydown", e => { if (e.key === "Enter") guardLoad(() => loadInput(e.target.value)); });
+(document.getElementById("confirmyes") as HTMLElement).addEventListener("click", () => { confirmWrap.hidden = true; const a = pendingLoad; pendingLoad = null; if (a) a(); });
+(document.getElementById("confirmno") as HTMLElement).addEventListener("click", () => { confirmWrap.hidden = true; pendingLoad = null; });
+(document.getElementById("load") as HTMLElement).addEventListener("click", () => guardLoad(() => loadInput(urlInput.value)));
+urlInput.addEventListener("keydown", e => { if (e.key === "Enter") guardLoad(() => loadInput((e.target as HTMLInputElement).value)); });
 urlInput.addEventListener("input", refreshLoadBtn);
 refreshLoadBtn(); // start disabled (field is empty on load)
 // Own-mp4 path is drag-and-drop only (see the drop handler below) — no upload button by design.
 
 // feedback: a text field that POSTs to /api/feedback (stored server-side in a private S3 bucket).
-document.getElementById("fbbtn").addEventListener("click", () => { fbStat.textContent = ""; fbWrap.hidden = false; fbText.focus(); });
-document.getElementById("fbcancel").addEventListener("click", () => { fbWrap.hidden = true; });
+(document.getElementById("fbbtn") as HTMLElement).addEventListener("click", () => { fbStat.textContent = ""; fbWrap.hidden = false; fbText.focus(); });
+(document.getElementById("fbcancel") as HTMLElement).addEventListener("click", () => { fbWrap.hidden = true; });
 fbSend.addEventListener("click", async () => {
   const text = fbText.value.trim();
   if (!text) { fbStat.textContent = "type something first"; return; }
@@ -61,11 +61,11 @@ fbSend.addEventListener("click", async () => {
 let dragDepth = 0; // enter/leave fire per-element; count so the cue doesn't flicker over children
 document.addEventListener("dragenter", e => { e.preventDefault(); if (dragDepth++ === 0) document.body.classList.add("dragging"); });
 document.addEventListener("dragover", e => e.preventDefault());
-document.addEventListener("dragleave", e => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
 document.addEventListener("drop", e => {
   e.preventDefault();
   dragDepth = 0; document.body.classList.remove("dragging");
-  const f = e.dataTransfer.files[0];
+  const f = (e as DragEvent).dataTransfer?.files[0];
   if (f) guardLoad(() => loadFile(f)); // dropping over a playing clip also asks first
 });
 
@@ -80,7 +80,8 @@ window.addEventListener("beforeunload", e => {
 });
 
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return; // don't hijack keys while typing
+  const tag = (e.target as HTMLElement).tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") return; // don't hijack keys while typing
   // 'd' toggles debug: the fps profiler line AND the dashed outline showing the embed's capture frame.
   if (e.key === "d") { rt.DEBUG = !rt.DEBUG; fpsEl.style.display = rt.DEBUG ? "block" : "none"; document.body.classList.toggle("show-bounds", rt.DEBUG); return; }
   if (e.code === "Space" && video.src) { e.preventDefault(); video.paused ? video.play() : video.pause(); }

@@ -1,4 +1,4 @@
-// sources.js — getting a video onto the screen. Three ways in, all landing on playSrc():
+// sources.ts — getting a video onto the screen. Three ways in, all landing on playSrc():
 //  • a video FILE (drop / upload) -> a same-origin blob URL. Always samples cleanly, no CORS/IP issues.
 //  • a direct VIDEO URL -> used as-is (needs CORS on that host for getImageData; crossorigin is set).
 //  • a YOUTUBE link -> /api/resolve turns it into a stream URL. Best-effort: from a cloud host YouTube
@@ -12,18 +12,18 @@ import { normalizeYouTube } from "./pure.js";
 
 // True while a video/link is resolving or loading. The submit CTAs (load button + url field) are disabled
 // for the duration so a second submit can't race the first (avoids swapping the source mid-load).
-export function setComputing(on) {
+export function setComputing(on: boolean): void {
   rt.computing = on;
   urlInput.disabled = on;
   refreshLoadBtn();
 }
 // Load is disabled while a load is in flight OR when the url field is empty (nothing to submit).
-export function refreshLoadBtn() {
+export function refreshLoadBtn(): void {
   loadBtn.disabled = rt.computing || !urlInput.value.trim();
 }
 
 const MAX_SECONDS = 300; // deny anything longer than 5 minutes (both youtube + dropped files)
-export function playSrc(src) {
+export function playSrc(src: string): void {
   rt.firstPaintPending = true; // hold the reveal + CTA block until the first ascii frame actually paints
   video.onloadedmetadata = () => {
     if (isFinite(video.duration) && video.duration > MAX_SECONDS) {
@@ -41,10 +41,10 @@ export function playSrc(src) {
 }
 
 // Show an error centrally and drop out of any loading state so the empty stage returns for a retry.
-export function showError(msg) { rt.firstPaintPending = false; setComputing(false); stopLoader(); status.textContent = msg; }
+export function showError(msg: string): void { rt.firstPaintPending = false; setComputing(false); stopLoader(); status.textContent = msg; }
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB cap on dropped files
-export function loadFile(file) {
+export function loadFile(file: File): void {
   if (rt.computing || !file) return; // ignore a drop while another load is in flight
   // We claim mp4-only. Reject anything else up front (covers both the upload button and drag-drop,
   // since both route through here) rather than half-playing a format we don't promise to support.
@@ -59,7 +59,7 @@ export function loadFile(file) {
 // The loader visual is a pure-CSS mosaic (no render-loop cost). It covers two waits: a youtube resolve
 // (~1 min — a single "downloading video…" label + the "~a minute" note) and a dropped-file decode
 // (near-instant — "rendering ascii…", note hidden). Pass isYouTube to pick which.
-export function startLoader(isYouTube) {
+export function startLoader(isYouTube: boolean): void {
   status.textContent = ""; // clear any prior error
   document.body.classList.remove("playing"); // bring the loading screen back, even over a clip that's playing
   screen.textContent = "";                    // clear the current ascii so only the loader shows
@@ -68,33 +68,33 @@ export function startLoader(isYouTube) {
   loaderSub.style.display = isYouTube ? "block" : "none";
   loaderMsg.textContent = isYouTube ? "downloading video…" : "rendering ascii…"; // static, no cycling
 }
-export function stopLoader() {
+export function stopLoader(): void {
   document.body.classList.remove("loading");
 }
 
-export async function loadYouTube(url) {
+export async function loadYouTube(url: string): Promise<void> {
   url = normalizeYouTube(url);
   rt.currentFile = null;
   rt.currentSourceId = (url.match(/[?&]v=([A-Za-z0-9_-]{11})/) || [, ""])[1] || url;
   setComputing(true); startLoader(true);
-  const fail = (m) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
+  const fail = (m?: string) => showError("couldn’t load — " + (m || "try another link or upload an mp4"));
 
-  let job;
+  let job: any;
   try {
     job = await fetch("/api/resolve?url=" + encodeURIComponent(url)).then((r) => r.json());
-  } catch (err) { return fail(err.message); }
+  } catch (err) { return fail((err as Error).message); }
   if (job.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(job.streamUrl); } // cache hit -> instant
   if (!job.runId) return fail(job.error || "");
 
   const deadline = Date.now() + 240000; // give up after 4 min
-  const poll = async () => {
+  const poll = async (): Promise<void> => {
     if (Date.now() > deadline) return fail("this took too long — try again or upload an mp4");
-    let s;
+    let s: any;
     try {
       s = await fetch("/api/resolve?runId=" + encodeURIComponent(job.runId) +
                       "&datasetId=" + encodeURIComponent(job.datasetId) +
                       "&videoId=" + encodeURIComponent(job.videoId || "")).then((r) => r.json());
-    } catch { return setTimeout(poll, 3000); } // transient network blip — keep polling
+    } catch { return void setTimeout(poll, 3000); } // transient network blip — keep polling
     if (s.streamUrl) { stopLoader(); status.textContent = ""; return playSrc(s.streamUrl); }
     if (["FAILED", "ABORTED", "TIMED-OUT"].includes(s.status)) return fail(s.error || s.status);
     setTimeout(poll, 3000); // READY / RUNNING — keep waiting
@@ -102,17 +102,17 @@ export async function loadYouTube(url) {
   poll();
 }
 
-export function loadInput(text) {
+export function loadInput(text: string): void {
   if (rt.computing) return;
   const s = (text || "").trim();
   if (!s) return;
-  if (/youtu\.?be/i.test(s)) return loadYouTube(s); // youtube.com / youtu.be
+  if (/youtu\.?be/i.test(s)) { loadYouTube(s); return; } // youtube.com / youtu.be
   rt.currentFile = null; rt.currentSourceId = s;
   setComputing(true); startLoader(false);
   playSrc(s); // treat anything else as a direct video URL
 }
 
-export function bindSources() {
+export function bindSources(): void {
   // A source can be rejected (expired / IP-locked / no CORS). Surface it instead of a black screen.
   video.addEventListener("error", () => { if (video.src) showError("this wouldn’t play — try a file or another link"); });
   if (IS_MOBILE) {
