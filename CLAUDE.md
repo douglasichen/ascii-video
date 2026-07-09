@@ -184,7 +184,13 @@ level → ASCII character → tinted DOM text**.
   the cube. Base colour and saturation **combine** (not mutually exclusive): at any
   saturation the chosen colour still tints the low end, and the mix rides up toward
   the video's own colour as saturation increases (base white = neutral, i.e. the old
-  gray→video behaviour). Only active with shading on.
+  gray→video behaviour). Only active with shading on. **Live-only:** saturation is NOT
+  carried into baked embeds — the bake stores only per-cell char-indices and the
+  `.asciiv` format + embed player render the 8-level gray ramp tinted by `colour`, so a
+  saturated clip you *save* comes out gray/base-tinted. It's therefore excluded from
+  `embedSig` (keying on it would mint distinct S3 keys for byte-identical bakes). To make
+  embeds WYSIWYG you'd have to carry the per-cell cube index in the frame stream (a
+  versioned `.asciiv` format change) and add saturation back to `embedSig`.
 - **Build assembly: one cons-string, not an array + join.** `paint()` grows the
   whole frame's markup with `out += …` rather than pushing per-cell parts into an
   array and `join()`-ing. V8 builds it as a rope and flattens once at assignment,
