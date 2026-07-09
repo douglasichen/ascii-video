@@ -25,7 +25,11 @@ export function setControl(key: keyof State, value: number | boolean | string): 
   // paused, so without this a detail change would only swap the font size on the stale text — scaling
   // it, which looks like a zoom. Repainting resamples at the new resolution so paused (and mid-play)
   // adjustments preview live at a fixed on-screen size. No-op until a video frame exists.
-  if (video.videoWidth && rt.rows) paint();
+  // NOT while an embed is baking: paint() captures a frame whenever rt.recording, so this on-demand
+  // preview repaint would inject a spurious out-of-cadence frame (+bogus timestamp) into the capture,
+  // inflating the baked frame count / fps. During a bake the video is playing and the render loop
+  // already reflects the change next frame, so skipping this preview repaint loses nothing.
+  if (video.videoWidth && rt.rows && !rt.recording) paint();
 }
 
 // Build the panel DOM from CONTROLS, then attach the input/hex/reset/toggle listeners. Called from main.
