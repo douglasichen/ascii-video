@@ -38,6 +38,8 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if not isinstance(body, dict):  # valid JSON that isn't an object (e.g. [] / "hi") -> 400, not a crash
+                raise ValueError("body must be a JSON object")
         except Exception:
             return self._json(400, {"error": "bad request"})
         text = (body.get("text") or body.get("message") or "").strip()
