@@ -96,7 +96,8 @@ test("pure.ts — palette, contrast-LUT order, grid, 125-cube, colour helpers, n
     for (const [name, f] of flips) ok(f() !== baseSig, "embedSig changes when " + name + " changes");
     // saturation is a LIVE-only look — it never reaches the baked bytes, so it must NOT change the key (else
     // sat 0 vs 50 mint distinct S3 keys for byte-identical content — a dedup miss). Locks that intent.
-    eq(P.embedSig("vid123", { ...s, saturation: 87 }, 200, 60), baseSig, "embedSig ignores saturation (embeds are gray/base-tinted)");
+    const withSat = { ...s, saturation: 87 }; // a variable, not a fresh literal → the extra field isn't an excess-property TS error
+    eq(P.embedSig("vid123", withSat, 200, 60), baseSig, "embedSig ignores saturation (embeds are gray/base-tinted)");
   }
 
   console.log(`PASS: src/pure.ts — ${passes} assertions (palette, contrast-LUT order, grid, 125-cube, colour helpers, normalizeYouTube, embedSig)`);
