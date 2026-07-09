@@ -39,7 +39,28 @@ def test_same_origin():
     assert not save.same_origin({"Host": host, "Origin": f"https://{host}.evil.com"})
 
 
+def test_poll_run_id_no_path_traversal():
+    # runId/datasetId are client-controlled; they must not be able to escape the intended
+    # api.apify.com path (which carries our APIFY_TOKEN) via "../.." traversal.
+    captured = {}
+
+    def fake_get(url):
+        captured["url"] = url
+        return {"data": {"status": "RUNNING"}}  # non-SUCCEEDED -> poll returns before the datasets call
+
+    orig = resolve._get
+    resolve._get = fake_get
+    try:
+        out = resolve.poll("../../key-value-stores/x/records/y", "dsid", "tok")
+    finally:
+        resolve._get = orig
+    assert out == {"status": "RUNNING"}, out
+    assert "/../" not in captured["url"], captured["url"]          # no live traversal segments
+    assert "actor-runs/..%2F" in captured["url"], captured["url"]  # slashes escaped, stays one segment
+
+
 if __name__ == "__main__":
     test_video_id()
     test_same_origin()
+    test_poll_run_id_no_path_traversal()
     print("test_api.py: OK")

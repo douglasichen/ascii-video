@@ -45,7 +45,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 ["yt-dlp", "-f", "mp4/best[ext=mp4]/best",
                  "--http-chunk-size", "10M", "--no-part",
                  "--retries", "5", "--fragment-retries", "5",
-                 "-o", VIDEO_FILE, url],
+                 # "--" ends option parsing: a url query param starting with "-" (e.g. --exec=<cmd>)
+                 # must be treated as a URL, not a yt-dlp flag.
+                 "-o", VIDEO_FILE, "--", url],
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as e:
