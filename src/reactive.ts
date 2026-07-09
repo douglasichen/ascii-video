@@ -13,13 +13,23 @@ let audioCtx: AudioContext, analyser: AnalyserNode, freqData: Uint8Array, audioR
 export function initAudio(): void {
   if (audioReady) return;
   try {
-    audioCtx = new ((window as any).AudioContext || (window as any).webkitAudioContext)();
+    // applyReactivity retries initAudio EVERY frame until it succeeds, so init must never leak on the
+    // failure paths (no captureStream — e.g. Firefox exposes mozCaptureStream, not captureStream; a tainted
+    // cross-origin video whose captureStream throws; or audio not flowing yet). The old code built a fresh
+    // AudioContext on each retry: on any permanently-failing source that churned a new context ~30×/s until
+    // the browser's ~6-context cap threw, after which reactivity could never init at all. Guard the call
+    // (embed.ts guards captureStream the same way) and REUSE one AudioContext across retries.
+    const capture = (video as any).captureStream;
+    if (typeof capture !== "function") return; // no captureStream on this browser -> reactivity stays off
+    const stream = capture.call(video);
+    if (!stream || stream.getAudioTracks().length === 0) return; // audio not up yet -> retry cheaply next frame
     // Feed the analyser from a CAPTURED stream, NOT createMediaElementSource(video). The element-source
     // node PERMANENTLY reroutes the <video>'s audio into the graph, which then makes the embed bake's
     // video.captureStream().getAudioTracks() come back silent/empty — so every embed baked after music
     // mode was ever on had no sound. A MediaStreamAudioSource taps a copy and leaves the element's own
     // audio path (speakers + captureStream) completely untouched.
-    const src = audioCtx.createMediaStreamSource((video as any).captureStream());
+    if (!audioCtx) audioCtx = new ((window as any).AudioContext || (window as any).webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;                // 512 bins, ~43 Hz/bin at 44.1kHz
     analyser.smoothingTimeConstant = 0.55;  // some smoothing, but keep transients for beats
