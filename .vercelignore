@@ -1,4 +1,6 @@
-# Only index.html + api/ + requirements.txt need to deploy. Keep the local-only tools and artifacts out.
+# Vercel auto-detects Vite (`vite build` -> dist/) and runs api/*.py as Python functions. The build needs
+# index.html + embed.html + src/ + the configs + api/ + requirements.txt uploaded — everything else is
+# local-only tooling or artifacts, kept out here.
 server.py
 ascii_video.py
 videoplayback.html
@@ -12,4 +14,5 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
-bench/
+node_modules/
+dist/
