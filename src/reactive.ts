@@ -4,7 +4,7 @@
 // gap); a beat kicks an envelope (env→1, exp decay) that pulses brightness/contrast + punches resolution
 // and drifts the colour hue. All of it writes the DRIVEN state keys from `base` + audio, so it rides the
 // existing paint()/span-merge model untouched. See experiments/music-reactive-notes.md. Idle unless react.
-import { state, base, DRIVEN } from "./state.js";
+import { state, base, DRIVEN, rt } from "./state.js";
 import { video } from "./dom.js";
 import { buildPalette, computeGrid } from "./render.js";
 import { clamp, bandAvg, hslHex, hexHue, mixHex } from "./pure.js";
@@ -99,6 +99,12 @@ export function applyReactivity(now: number): void {
 // the loop wraps. Fade window shrinks for very short clips so the in/out never overlap.
 const FADE_SECONDS = 1.5;
 export function updateFade(): void {
+  // Don't apply the live seam-fade WHILE a bake is recording. The embed bakes `fade` into its header and
+  // re-applies the fade on playback, so if captureStream() taps the element's post-volume audio the recorded
+  // audio would already be faded and the embed would fade it AGAIN — a double-dip to near-silence at every
+  // loop seam. Hold volume at 1 during capture so the embed's own single fade is the only one. (Harmless if
+  // capture is pre-volume: it just skips the inaudible live fade during the ~clip-length bake behind the cover.)
+  if (rt.recording) { video.volume = 1; return; }
   if (!state.fade || !isFinite(video.duration) || video.duration <= 0) { video.volume = 1; return; }
   const d = video.duration, t = video.currentTime, f = Math.min(FADE_SECONDS, d / 3);
   let v = 1;
