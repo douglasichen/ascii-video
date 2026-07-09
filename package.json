@@ -10,6 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "~5.6.3",

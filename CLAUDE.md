@@ -313,11 +313,11 @@ known *before* baking — `embedHash()` = SHA-256 of the source (a file's bytes,
 or the youtube id / direct url) **plus the exact render settings**. That buys two
 things at once:
 
-- **Instant snippet.** Baking records one full loop in real time (unavoidably
-  slow — MediaRecorder audio is real-time), so we show the `<iframe>` snippet
-  *immediately* on click and bake+upload in the **background**. `embed.html`
-  treats a 404/403 as "not baked yet" → shows *"ascii video will be here soon!"*
-  and re-polls, so a snippet pasted before the bake finishes lights up on its own.
+- **Instant snippet.** Baking is slow (backend ffmpeg transcode, or the legacy
+  real-time MediaRecorder loop), so we show the `<iframe>` snippet *immediately*
+  on click and bake+upload in the **background**. `embed.html` treats a 404/403
+  as "not baked yet" → shows *"ascii video will be here soon!"* and re-polls, so
+  a snippet pasted before the bake finishes lights up on its own.
 - **Caching / dedup.** Same source + same look → same key. `POST /api/save`
   with `{hash}` `head_object`s it: a HIT returns `{cached:true}` and the client
   skips the whole bake+upload; a MISS presigns *that deterministic key* (no hash
@@ -326,6 +326,52 @@ things at once:
 
 `api/save.py` validates the hash is 64 hex before trusting it as a key.
 Progress shows in the modal's `#embedstat`, not by blocking the button.
+
+### Backend bake (`api/bake.ts`, ffmpeg) — the default path
+
+The bake compute moved OFF the browser. The old real-time path
+(`bakeInBackground` in `embed.ts`) recorded the on-screen `<video>` via
+`captureStream()` + `MediaRecorder` — a full clip-length wait that also
+**required the tab to stay foreground** (rVFC stops firing when hidden, so a
+tab-switch mid-bake froze frames; there's a whole hidden-guard for it). The
+default now is a **Node serverless function** (`api/bake.ts`) that ffmpegs the
+clip faster-than-real-time, headless:
+
+- **Same bytes, shared code.** The function imports the SAME
+  `pure.buildFrameHTML` / `buildContrastLUT` and `codec.encodeAsciiv2` the
+  browser uses — the quantization + v:2 encoder are NOT reimplemented in Python
+  or duplicated. ffmpeg (`ffmpeg-static`, bundled ~78 MB linux binary, under
+  Vercel's 250 MB limit) decodes to raw RGBA at exactly `cols×rows` and the
+  fixed `fps` (`scale=…:flags=bilinear` — closest to canvas `drawImage`), each
+  frame is fed through `buildFrameHTML` with a `rec` buffer, then
+  `encodeAsciiv2`. Audio: `-c:a libopus -f webm` → `audioMime` "audio/webm".
+  Given identical RGBA the packed cells are byte-identical to the live look; the
+  one difference is *sampling* (ffmpeg scale/YUV→RGB vs canvas), which the
+  8-level / 125-cube quantization collapses → visually identical, not
+  bit-identical (the old real-time bake wasn't bit-deterministic either).
+- **Same UX (instant snippet + dedup unchanged).** The **client** still owns the
+  content-hash key, snippet, and `/api/save` cache check. On a MISS it fires
+  `/api/bake` with the ALREADY-RESOLVED playback URL (`video.currentSrc` — the
+  Apify mp4 for youtube, or the direct URL), the grid, settings, and the
+  presigned upload; the function fetches the source, bakes, and uploads to that
+  presigned S3 key itself (plain multipart `fetch`, no AWS SDK — it reuses the
+  presign `/api/save` already minted). The embed page polls S3 and lights up.
+- **Fallback keeps everything working.** `tryBackendBake` returns false — and
+  the client falls back to the real-time `bakeInBackground` — for **dropped
+  files** (`blob:` sources aren't fetchable server-side; backend file-upload is
+  deferred phase-2), clips **over the `BACKEND_MAX_SEC`=90 s cap**, or if
+  `/api/bake` is unreachable (not deployed yet). So no source regresses.
+- **Feasibility / limits.** A 17.8 s clip bakes in ~1–2 s at real grids
+  (faster-than-real-time). What binds first is NOT the 300 s function timeout but
+  the **25 MB S3 upload cap** (`api/save.py`): v:2 delta size scales with
+  motion×grid×duration, so a high-motion clip at a large grid can exceed 25 MB
+  well before 90 s and the presigned POST rejects it (same ceiling the old bake
+  had). `api/bake.ts` also bounds in-memory grids (`MAX_TOTAL_CELLS`) so a huge
+  grid × long clip can't OOM the function. `vercel.json` gives the function
+  `maxDuration:300` + `memory:1769` and `includeFiles` the ffmpeg binary (nft
+  doesn't reliably trace the computed binary path). The real answer for long
+  (up-to-5-min) clips is a background queue/worker — deferred; the current slice
+  ships the feasible short-clip range and falls back for the rest.
 
 ### The `.asciiv` format: v:2 (fixed-fps, WYSIWYG colour) and why
 
@@ -377,13 +423,15 @@ decompressed streams (gzip-bomb cap covers both layouts).
 Implements `docs/superpowers/specs/2026-07-05-vercel-migration-design.md`.
 Structure: **Vercel auto-detects Vite** and runs `vite build` → `dist/`
 (`index.html` at `/`, `embed.html` at `/embed.html`, hashed JS bundles), while
-still running `api/*.py` as Python serverless functions (`/api/resolve`,
-`/api/save`, `/api/feedback`); `requirements.txt` (`yt-dlp`, `boto3`) drives the
-Python deps. `.vercelignore` keeps `server.py`/`ascii_video.py`/`tests/`/
-artifacts out of the upload. **Still zero-config — no `vercel.json` needed**: the
-Vite framework preset already produces `dist/` as the static output AND leaves
-`api/*.py` as functions, so the multi-page + Python combo works on auto-detection
-alone. Deploy with `vercel` / `vercel --prod` (needs `vercel login` first).
+running the `api/` functions alongside: `api/*.py` as **Python** functions
+(`/api/resolve`, `/api/save`, `/api/feedback`; `requirements.txt` = `yt-dlp`,
+`boto3`) AND `api/bake.ts` as a **Node** function (`/api/bake`, the backend bake;
+`package.json` `dependencies` = `ffmpeg-static`). `.vercelignore` keeps
+`server.py`/`ascii_video.py`/`tests/`/artifacts out of the upload. `vercel.json`
+carries the Vite `buildCommand`/`outputDirectory` **and** the `api/bake.ts`
+function config (`maxDuration:300`, `memory:1769`, `includeFiles` for the ffmpeg
+binary). Deploy with `vercel` / `vercel --prod` (needs `vercel login` first).
+NOTE: `maxDuration:300` needs a Pro plan (Hobby caps at 60 s — lower it there).
 
 Input sources (`loadInput()` dispatches by type): a **video file** (drag-drop
 or ↑ upload) plays as a same-origin blob URL — the reliable path on any host,

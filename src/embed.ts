@@ -11,6 +11,10 @@ import { encodeAsciiv2, resampleToFps, type EncodeHeader } from "./codec.js";
 // Presigned S3 POST returned by /api/save on a cache MISS (a HIT returns { cached:true } instead).
 type SaveUpload = { url: string; fields: Record<string, string> };
 
+// Backend bake caps the clip length it handles (ffmpeg in a serverless function; see api/bake.ts). Longer
+// clips + dropped files (blob: URLs aren't fetchable server-side) fall back to the real-time browser bake.
+const BACKEND_MAX_SEC = 90;
+
 async function sha256hex(bytes: Uint8Array): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -45,10 +49,38 @@ async function startBake(): Promise<void> {
     } catch { save = null; }
     if (save && save.cached) return;            // already generated — embed is live
     if (!save || !save.upload) return;          // couldn't reach the embed service — snippet still works once generated
+    // Prefer the BACKEND bake (ffmpeg, faster-than-real-time, no tab-foreground requirement) for a fetchable
+    // source within the length cap. Fall back to the real-time browser bake for dropped files (blob: source),
+    // over-cap clips, or if the backend endpoint isn't reachable — so an embed is always produced.
+    if (await tryBackendBake(save.upload)) return;
     await bakeInBackground(save.upload);
   } finally {
     embedBtn.disabled = false; // label stays "save" (static icon+text)
   }
+}
+
+// Hand the bake to /api/bake: pass the ALREADY-RESOLVED playback URL (video.src — an Apify mp4 for youtube,
+// or the direct URL) + the exact grid + settings + the presigned upload. The backend fetches the source,
+// ffmpeg-decodes it, asciifies with the SAME shared code (byte-identical quantization), and uploads the
+// .asciiv itself. Returns true if the backend accepted+completed the job (200), false to fall back. A blob:
+// source (dropped file) or a clip over the length cap short-circuits to false without a request.
+async function tryBackendBake(upload: SaveUpload): Promise<boolean> {
+  const src = video.currentSrc || video.src;
+  const dur = isFinite(video.duration) ? video.duration : 0;
+  if (!src || src.startsWith("blob:") || dur <= 0 || dur > BACKEND_MAX_SEC) return false;
+  const fps = Math.min(30, Math.max(1, Math.round(state.maxfps)));
+  const settings = {
+    color: state.color, shading: state.shading, detail: state.detail, contrast: state.contrast,
+    brightness: state.brightness, invert: state.invert, saturation: state.saturation,
+    fade: state.fade, maxfps: state.maxfps,
+  };
+  try {
+    const r = await fetch("/api/bake", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: src, cols: rt.cols, rows: rt.rows, fps, settings, upload }),
+    });
+    return r.ok; // 200 -> baked+uploaded; anything else -> fall back to the real-time bake
+  } catch { return false; } // endpoint unreachable (not deployed yet) -> fall back
 }
 
 // Seek to content t=0 BEFORE audio + frame capture start, so the embed's frame 0 is the real start of the
