@@ -43,7 +43,7 @@ export interface State {
 // entries are rendered top-to-bottom and a section header is emitted whenever `section` changes.
 export const CONTROLS: Record<keyof State, ControlDef> = {
   // ── basic ────────────────────────────────────────────────────────────────
-  detail: { label: "resolution", section: "basic", min: 1, max: 9, step: 1, default: 6, unit: "" },
+  detail: { label: "resolution", section: "basic", min: 1, max: 9, step: 1, default: 6 },
   contrast: { label: "contrast", section: "basic", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   brightness: { label: "brightness", section: "basic", min: 0, max: 100, step: 1, default: 50, unit: "%" },
   // base display colour. Shade mode ramps each level black -> this colour (tinted depth); turbo mode uses
@@ -59,7 +59,7 @@ export const CONTROLS: Record<keyof State, ControlDef> = {
   // (~1.3x gray span count). Combines with the base colour (mixes base-tinted gray -> the video's colour).
   saturation: { label: "saturation", section: "advanced", min: 0, max: 100, step: 1, default: 0, unit: "%" },
   // Cap the render framerate (max 30). The video keeps playing at its own rate; lower = fewer DOM rebuilds.
-  maxfps: { label: "max fps", section: "advanced", min: 5, max: 30, step: 1, default: 30, unit: "" },
+  maxfps: { label: "max fps", section: "advanced", min: 5, max: 30, step: 1, default: 30 },
   // Fade the audio up/down at each loop's start/end — smooth seam. Carried into baked embeds (bake header).
   fade: { label: "fade audio", section: "advanced", type: "checkbox", default: true },
   // ── music reactive ───────────────────────────────────────────────────────
