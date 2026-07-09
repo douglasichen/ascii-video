@@ -8,12 +8,8 @@ import { state, rt } from "./state.js";
 import { embedSig } from "./pure.js";
 import { encodeAsciiv, type EncodeHeader } from "./codec.js";
 
-const fmt = (s: number): string => { s = Math.max(0, Math.round(s)); return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
-
-// The background bake/upload is a backend detail — deliberately NOT surfaced in the modal. The snippet is
-// handed over immediately; if a viewer loads the embed before it finishes, embed.html shows its own
-// "ascii video will be here soon!" placeholder. So this is a no-op (calls left in place, intentionally silent).
-function setEmbedStat(_msg?: string): void {}
+// Presigned S3 POST returned by /api/save on a cache MISS (a HIT returns { cached:true } instead).
+type SaveUpload = { url: string; fields: Record<string, string> };
 
 async function sha256hex(bytes: Uint8Array): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", bytes);
@@ -42,28 +38,65 @@ async function startBake(): Promise<void> {
   try {
     const hash = await embedHash();
     showSnippet(hash + ".asciiv"); // instant
-    setEmbedStat("preparing…"); // clear any stale status from a previous save
-    let save: any;
+    let save: { cached?: boolean; upload?: SaveUpload } | null;
     try {
       save = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hash }) }).then(r => r.json());
     } catch { save = null; }
-    if (save && save.cached) return setEmbedStat("✓ already generated — your embed is live now");
-    if (!save || !save.upload) return setEmbedStat("couldn’t reach the embed service — the snippet still works once it’s generated");
+    if (save && save.cached) return;            // already generated — embed is live
+    if (!save || !save.upload) return;          // couldn't reach the embed service — snippet still works once generated
     await bakeInBackground(save.upload);
   } finally {
-    embedBtn.disabled = false; // label stays "save" (static icon+text); progress shows in the modal
+    embedBtn.disabled = false; // label stays "save" (static icon+text)
   }
+}
+
+// Seek to content t=0 BEFORE audio + frame capture start, so the embed's frame 0 is the real start of the
+// clip. Without this the bake records "from wherever the video is now" (playhead C): frame 0 = mid-clip, the
+// true beginning lands at the tail of the loop, and a viewer entering the iframe starts partway through — the
+// "beginning missing" bug. Both the audio recorder (captureStream) and frames must begin here and stay in
+// lockstep, so we seek+settle before mr.start()/recStart. Await `seeked` (not just set currentTime) so the
+// first captured frames are real start-of-clip, not stale/blank mid-seek. Timeout fallback so a browser that
+// never fires `seeked` can't hang the bake. Skip when already at/near 0 or the duration isn't seekable (live
+// stream). The live player just continues from 0 afterward — it's looping.
+async function seekToStart(video: HTMLVideoElement): Promise<void> {
+  if (isFinite(video.duration) && video.currentTime > 0.05) {
+    await new Promise<void>(res => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; video.removeEventListener("seeked", finish); res(); };
+      video.addEventListener("seeked", finish);
+      video.currentTime = 0;
+      setTimeout(finish, 500);
+    });
+  }
+}
+
+// Encode the captured frames + audio to .asciiv and upload to the presigned S3 key. Runs AFTER the recorder
+// has stopped — reads only the finished capture buffers (rt.recFrames/recTimes), no live timing state.
+async function encodeAndUpload(upload: SaveUpload, audioBlob: Blob | null, dur: number): Promise<void> {
+  const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
+  const fps = Math.max(1, Math.round(rt.recFrames.length / dur));
+  // times[] = each frame's real capture instant (ms from recStart); durationMs = the FULL recording span
+  // (the loop period), so the last frame holds until the loop wraps in lockstep with the ~dur-long audio.
+  const times = rt.recTimes.map(t => Math.round(t));
+  const header: EncodeHeader = { fps, cols: rt.cols, rows: rt.rows, colour: state.color, shading: state.shading, fade: state.fade,
+                   durationMs: Math.round(dur * 1000), times, audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
+  const bytes = await encodeAsciiv(header, rt.recFrames, audio);
+  rt.recFrames = []; rt.recTimes = []; // free memory early
+  const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
+  Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v));
+  fd.append("file", new Blob([bytes], { type: "application/octet-stream" }));
+  const up = await fetch(upload.url, { method: "POST", body: fd });
+  if (!up.ok) throw new Error("upload failed (" + up.status + ")");
 }
 
 // Records exactly one loop from wherever the video is now (it keeps looping, so audio + frames wrap
 // seamlessly), encodes to .asciiv, and uploads to the presigned key. Runs while the snippet is already
 // shown, so its real-time cost is off the click path.
-async function bakeInBackground(upload: any): Promise<void> {
+async function bakeInBackground(upload: SaveUpload): Promise<void> {
   rt.baking = true;
   document.body.classList.add("baking"); // opaque cover over the live player while we seek+scrub it to capture
   const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
-  setEmbedStat(`generating… your embed goes live in about ${fmt(dur)}`);
   let mr: MediaRecorder | null = null; const audioChunks: Blob[] = [];
   try {
     const stream: MediaStream | null = (video as any).captureStream ? (video as any).captureStream() : null;
@@ -92,23 +125,7 @@ async function bakeInBackground(upload: any): Promise<void> {
   document.addEventListener("visibilitychange", onVis);
   try {
     if (video.paused) await video.play();
-    // Seek to content t=0 BEFORE audio + frame capture start, so the embed's frame 0 is the real start of
-    // the clip. Without this the bake records "from wherever the video is now" (playhead C): frame 0 =
-    // mid-clip, the true beginning lands at the tail of the loop, and a viewer entering the iframe starts
-    // partway through — the "beginning missing" bug. Both the audio recorder (captureStream) and frames must
-    // begin here and stay in lockstep, so we seek+settle before mr.start()/recStart. Await `seeked` (not just
-    // set currentTime) so the first captured frames are real start-of-clip, not stale/blank mid-seek. Timeout
-    // fallback so a browser that never fires `seeked` can't hang the bake. Skip when already at/near 0 or the
-    // duration isn't seekable (live stream). The live player just continues from 0 afterward — it's looping.
-    if (isFinite(video.duration) && video.currentTime > 0.05) {
-      await new Promise<void>(res => {
-        let done = false;
-        const finish = () => { if (done) return; done = true; video.removeEventListener("seeked", finish); res(); };
-        video.addEventListener("seeked", finish);
-        video.currentTime = 0;
-        setTimeout(finish, 500);
-      });
-    }
+    await seekToStart(video);
     if (mr) mr.start();
     // recStart is the origin frame timestamps are measured from — set it right at mr.start()/recording so it
     // matches the audio recording's own t=0. Playback maps audioEl.currentTime through these times.
@@ -118,11 +135,12 @@ async function bakeInBackground(upload: any): Promise<void> {
     // opening span is still excluded and rVFC-starved frames don't bake a gap.
     if (document.hidden) { hiddenSince = rt.recStart; if (mr && mr.state === "recording") mr.pause(); }
     rt.recording = true;
+    // Wait one full FOREGROUND `dur` — poll the adjusted elapsed (excludes recPausedMs + the current hidden
+    // span) so tab-switches don't shorten the recording. This is the timing spine; leave it alone.
     await new Promise<void>(res => {
       const t0 = performance.now();
       const iv = setInterval(() => {
         const el = (performance.now() - t0 - rt.recPausedMs - (hiddenSince ? performance.now() - hiddenSince : 0)) / 1000;
-        setEmbedStat(`generating… ${fmt(el)} / ${fmt(dur)}`);
         if (el >= dur) { clearInterval(iv); res(); }
       }, 200);
     });
@@ -130,26 +148,9 @@ async function bakeInBackground(upload: any): Promise<void> {
     let audioBlob: Blob | null = null;
     if (mr) audioBlob = await new Promise<Blob>(res => { mr!.onstop = () => res(new Blob(audioChunks, { type: mr!.mimeType || "audio/webm" })); mr!.stop(); });
     if (!rt.recFrames.length) throw new Error("no frames captured");
-    setEmbedStat("encoding…");
-    const audio = audioBlob ? new Uint8Array(await audioBlob.arrayBuffer()) : null;
-    const fps = Math.max(1, Math.round(rt.recFrames.length / dur));
-    // times[] = each frame's real capture instant (ms from recStart); durationMs = the FULL recording span
-    // (the loop period), so the last frame holds until the loop wraps in lockstep with the ~dur-long audio.
-    const times = rt.recTimes.map(t => Math.round(t));
-    const header: EncodeHeader = { fps, cols: rt.cols, rows: rt.rows, colour: state.color, shading: state.shading, fade: state.fade,
-                     durationMs: Math.round(dur * 1000), times, audioMime: audioBlob ? (audioBlob.type || "audio/webm") : "" };
-    const bytes = await encodeAsciiv(header, rt.recFrames, audio);
-    rt.recFrames = []; rt.recTimes = []; // free memory early
-    setEmbedStat("uploading…");
-    const fd = new FormData(); // presigned POST: fields first, file LAST (S3 requires this order)
-    Object.entries(upload.fields).forEach(([k, v]) => fd.append(k, v as string));
-    fd.append("file", new Blob([bytes], { type: "application/octet-stream" }));
-    const up = await fetch(upload.url, { method: "POST", body: fd });
-    if (!up.ok) throw new Error("upload failed (" + up.status + ")");
-    setEmbedStat("✓ your embed is live");
-  } catch (e) {
-    setEmbedStat("couldn’t finish generating — " + ((e as Error).message || "try again"));
-  } finally {
+    await encodeAndUpload(upload, audioBlob, dur);
+  } catch { /* bake failed — nothing to surface; a later bake of the same key still lights up the snippet */ }
+  finally {
     document.removeEventListener("visibilitychange", onVis);
     document.body.classList.remove("baking");
     if (hiddenSince && mr && mr.state === "paused") mr.resume(); // don't leave the recorder wedged if we bailed while hidden
