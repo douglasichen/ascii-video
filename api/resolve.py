@@ -119,23 +119,52 @@ def _get(url):
         return json.load(r)
 
 
-def poll(run_id, dataset_id, token, video_id=""):
-    """{status} while running, or {status:'SUCCEEDED', streamUrl} once ready (and caches the URL)."""
+def _run_video_id(run, tok):
+    """The video id the run ACTUALLY resolved, read back from the run's own INPUT record (the JSON `start`
+    POSTed: {startUrls:[canonical]}). Server-authoritative on purpose — the cache key must never come from a
+    client-supplied ?videoId=, or a caller could resolve video A but cache its URL under video B's key
+    (poisoning cache/<B>.json for 6 days). Best-effort: "" -> we just don't cache (a miss, never a poison)."""
+    try:
+        kv = run.get("defaultKeyValueStoreId")
+        if not kv:
+            return ""
+        inp = _get(f"{API}/key-value-stores/{urllib.parse.quote(kv, safe='')}/records/INPUT?token={tok}")
+        urls = (inp or {}).get("startUrls") or []
+        first = urls[0] if urls else ""
+        if isinstance(first, dict):  # Apify may normalize startUrls to request objects [{url:...}]
+            first = first.get("url", "")
+        return _video_id(first) if isinstance(first, str) else ""
+    except Exception:
+        return ""
+
+
+def poll(run_id, token):
+    """{status} while running, or {status:'SUCCEEDED', streamUrl} once ready (and caches the URL under a
+    video id DERIVED FROM THE RUN, never a client-supplied one — see below)."""
     tok = urllib.parse.quote(token)
-    # safe="" escapes "/" too: run_id/dataset_id are client-controlled, and quote's default safe="/"
-    # would let "../.." traverse out of /actor-runs into arbitrary api.apify.com paths carrying our token.
-    status = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id, safe='')}?token={tok}")["data"]["status"]
+    # safe="" escapes "/" too: run_id is client-controlled, and quote's default safe="/" would let "../.."
+    # traverse out of /actor-runs into arbitrary api.apify.com paths carrying our token.
+    run = _get(f"{API}/actor-runs/{urllib.parse.quote(run_id, safe='')}?token={tok}")["data"]
+    status = run["status"]
     if status == "ABORTED":  # almost always the maxTotalChargeUsd cap tripping on a too-long video
         return {"status": "ABORTED", "error": "video too long (hit the cost limit)"}
     if status != "SUCCEEDED":
         return {"status": status}  # READY / RUNNING / FAILED / TIMED-OUT
+    # Take the dataset AND the cache-key video id from the RUN ITSELF (defaultDatasetId + INPUT), never from
+    # client params. runId is Apify-issued/unforgeable; datasetId and videoId used to be trusted from the
+    # query, which let an attacker pair a real runId with a foreign datasetId/videoId to poison the cache.
+    dataset_id = run.get("defaultDatasetId") or ""
+    if not dataset_id:
+        return {"status": "FAILED", "error": "run has no dataset"}
     items = _get(f"{API}/datasets/{urllib.parse.quote(dataset_id, safe='')}/items?token={tok}")
     for it in items:
         if it.get("demo"):
             return {"status": "FAILED", "error": "Apify actor not activated (demo output)"}
         out = it.get("output") or {}
         if it.get("status") == "succeeded" and out.get("url"):
-            cache_put(video_id, out["url"])
+            vid = _run_video_id(run, tok)  # server-authoritative; "" -> skip the cache write (never poison)
+            if vid:
+                cache_put(vid, out["url"])
             return {"status": "SUCCEEDED", "streamUrl": out["url"]}
     return {"status": "FAILED", "error": "run succeeded but no video url in output"}
 
@@ -149,8 +178,8 @@ class handler(BaseHTTPRequestHandler):  # Vercel's Python runtime calls a class 
         run_id = (q.get("runId") or [""])[0]
         url = (q.get("url") or [""])[0]
         try:
-            if run_id:  # poll mode
-                return self._json(200, poll(run_id, (q.get("datasetId") or [""])[0], token, (q.get("videoId") or [""])[0]))
+            if run_id:  # poll mode — datasetId/videoId in the query are ignored (derived from the run instead)
+                return self._json(200, poll(run_id, token))
             if url:  # start mode — reject anything that isn't a genuine YouTube video URL
                 if not _video_id(url):
                     return self._json(400, {"error": "not a valid YouTube video URL"})
@@ -183,7 +212,7 @@ if __name__ == "__main__":  # smoke test: APIFY_TOKEN=... python3 api/resolve.py
         import time as _t
         for _ in range(60):
             _t.sleep(3)
-            s = poll(job["runId"], job["datasetId"], tok, job.get("videoId", ""))
+            s = poll(job["runId"], tok)
             print(" ", s.get("status"), s.get("streamUrl", ""))
             if s.get("streamUrl") or s["status"] in ("FAILED", "ABORTED", "TIMED-OUT"):
                 break
