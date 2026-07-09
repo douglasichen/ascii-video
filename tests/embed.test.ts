@@ -142,6 +142,24 @@ test("validHeader + decode fail closed on corrupted/truncated input", async () =
   const truncated = bytes.slice(0, bytes.length - 5);
   await assert.rejects(() => decodeAsciiv(truncated));
 
+  // gzip bomb: a VALID header (small dims/frameCount) but a frame blob that decompresses to far more than the
+  // header could ever legitimately hold. The header caps are supposed to keep a tiny file from OOMing the
+  // viewer, but decode fully materializes the decompressed stream first — so this must fail closed, not swell.
+  {
+    const gz = async (u8: Uint8Array) =>
+      new Uint8Array(await new Response(new Response(u8).body!.pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+    // rebuild the good file with tiny dims (N=4, frameCount=1 -> max legit frame stream = 4 bytes)
+    const tiny = { fps: 30, cols: 2, rows: 2, colour: "#ffffff", shading: true, fade: false, durationMs: 100, audioMime: "" };
+    const base = await encodeAsciiv(tiny, [new Uint8Array([1, 2, 3, 4])], null);
+    const bdv = new DataView(base.buffer, base.byteOffset, base.byteLength);
+    const bh = bdv.getUint32(4, true), ba = bdv.getUint32(8 + bh, true);
+    const prefix = base.subarray(0, 12 + bh + ba);
+    const bomb = await gz(new Uint8Array(200000)); // ~200 bytes -> 200000 bytes, vs a 4-byte header budget
+    const malicious = new Uint8Array(prefix.length + bomb.length);
+    malicious.set(prefix, 0); malicious.set(bomb, prefix.length);
+    await assert.rejects(() => decodeAsciiv(malicious), /frame stream too large/, "oversized decompressed frame stream is rejected, not materialized");
+  }
+
   // valid container shape but a busted colour written straight into the header JSON -> fail closed
   const dv = new DataView(bytes.buffer);
   const hlen = dv.getUint32(4, true);

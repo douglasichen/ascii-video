@@ -121,9 +121,23 @@ async function gzip(u8: Uint8Array): Promise<Uint8Array> {
   const s = new Response(u8).body!.pipeThrough(new CompressionStream("gzip"));
   return new Uint8Array(await new Response(s).arrayBuffer());
 }
-async function gunzip(u8: Uint8Array): Promise<Uint8Array> {
-  const s = new Response(u8).body!.pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(s).arrayBuffer());
+// Decompress with a hard output cap. The frame stream is untrusted (any .asciiv can be uploaded via the
+// presigned /api/save and the 25 MB cap only bounds the COMPRESSED size), so a tiny highly-compressible gzip
+// can balloon to gigabytes and OOM the viewer — the header caps don't help because the whole buffer is
+// materialized here, before decodeFrames reads a byte. Stream-read and abort once the output exceeds the
+// header-implied maximum (computed by the caller); a legit stream is always <= that bound.
+async function gunzip(u8: Uint8Array, maxBytes: number): Promise<Uint8Array> {
+  const rs = new Response(u8).body!.pipeThrough(new DecompressionStream("gzip"));
+  const reader = rs.getReader();
+  const chunks: Uint8Array[] = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) { await reader.cancel(); throw new Error("frame stream too large"); }
+    chunks.push(value);
+  }
+  return concat(chunks);
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {
@@ -187,6 +201,10 @@ export async function decodeAsciiv(u8: Uint8Array): Promise<DecodedAsciiv> {
   const audioStart = 12 + headerLen;
   const audio = audioLen ? u8.subarray(audioStart, audioStart + audioLen) : null;
   const framesGz = u8.subarray(audioStart + audioLen);
-  const frames = decodeFrames(await gunzip(framesGz), header.cols * header.rows, header.frameCount);
+  // Max legit decompressed frame stream = keyframe (N) + per delta-frame (u32 count + count*(u32 idx,u8 val),
+  // count <= N). Header is already validated/capped here, so this bounds the bomb to what the header allows.
+  const N = header.cols * header.rows;
+  const maxStream = N + (header.frameCount - 1) * (4 + 5 * N);
+  const frames = decodeFrames(await gunzip(framesGz, maxStream), N, header.frameCount);
   return { header, frames, audio: audio ? audio.slice() : null };
 }
