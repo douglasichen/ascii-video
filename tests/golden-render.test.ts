@@ -12,9 +12,10 @@ import assert from "node:assert";
 //       glyphs; the colour level is re-derived in the embed and may differ, which is by design).
 import * as P from "../src/pure";
 import { buildRows } from "../src/codec";
-import { makeFrame, makeClut, buildBaseline } from "./helpers";
+import { makeFrame, makeColorFrame, makeClut, buildBaseline } from "./helpers";
 
 const stripTags = (html: string) => html.replace(/<\/?i[^>]*>/g, ""); // leave just the glyph + newline stream
+const countRuns = (html: string) => (html.match(/<i/g) || []).length; // one <i per span run ("</i>" won't match)
 
 test("golden render — buildFrameHTML byte-identical to baseline, stable, cube-valid, codec glyphs agree", () => {
   let passes = 0;
@@ -75,4 +76,23 @@ test("golden render — buildFrameHTML byte-identical to baseline, stable, cube-
   }
 
   console.log(`PASS: golden render — ${passes} assertions (byte-identical baseline, stability, cube validity, codec glyph agreement)`);
+});
+
+// The perf claim from CLAUDE.md: the saturation (125-colour cube) path keeps runs mergeable, costing only
+// ~1.3x the gray span count — NOT the ~4.3x span explosion of raw per-cell RGB. Computed here from the REAL
+// P.buildFrameHTML span count (count "<i" runs) on chroma-rich frames — the honest worst case. (Folded in from
+// the deleted color.test.ts, which hand-reimplemented the loop; base "#ffffff" makes the tinted mix reduce to
+// the same gray + (R-gray)*t the old copy asserted, so no coverage is lost.)
+test("saturation run-count ratio — cube markup stays within ~1.3x the gray span count (perf claim)", () => {
+  const clut = makeClut();
+  const [cols, rows] = [400, 120];
+  let grayRuns = 0, colorRuns = 0;
+  for (let f = 0; f < 30; f++) {
+    const fr = makeColorFrame(cols, rows, f);
+    grayRuns += countRuns(P.buildFrameHTML(fr, cols, rows, { shading: true, saturation: 0, color: "#ffffff" }, clut, null));
+    colorRuns += countRuns(P.buildFrameHTML(fr, cols, rows, { shading: true, saturation: 100, color: "#ffffff" }, clut, null));
+  }
+  const ratio = colorRuns / grayRuns;
+  assert.ok(ratio > 1 && ratio <= 1.5, `sat=100 run count ${ratio.toFixed(2)}x gray — expected ~1.3x, must stay <=1.5x (else the merge broke)`);
+  console.log(`PASS: saturation run-count ratio ${ratio.toFixed(2)}x the gray path (perf claim ~1.3x holds)`);
 });
