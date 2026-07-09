@@ -116,6 +116,12 @@ def selftest():
     assert CHAR_LUT[0] == RAMP[0] and CHAR_LUT[255] == RAMP[-1]
     # monotonic: brighter byte never maps to an earlier (less dense) ramp char
     assert all(RAMP.index(CHAR_LUT[b]) <= RAMP.index(CHAR_LUT[b + 1]) for b in range(255))
+    # regression: non-positive --cols must fail fast, not hang (extract_frames'
+    # `len(buf) < frame_size` guard is 0 < 0 == False → infinite loop). Runs the
+    # CLI in a subprocess with a timeout; a hang would raise TimeoutExpired here.
+    r = subprocess.run([sys.executable, os.path.abspath(__file__), "--cols", "0", "x.mp4"],
+                       capture_output=True, text=True, timeout=15)
+    assert r.returncode != 0 and "cols" in r.stderr, (r.returncode, r.stderr)
     print("selftest OK")
 
 
@@ -133,6 +139,13 @@ def main():
         return
     if not args.input:
         ap.error("input is required unless --selftest")
+    # Non-positive cols → frame_size 0/negative: extract_frames' read guard never
+    # trips (0 < 0 is False) so it spins forever, or read(-n) raises; plus a
+    # div-by-zero in build_html. Reject at the boundary. fps<=0 gives broken output too.
+    if args.cols < 1:
+        ap.error("--cols must be a positive integer")
+    if args.fps is not None and args.fps <= 0:
+        ap.error("--fps must be positive")
 
     out_path = args.output or os.path.splitext(args.input)[0] + ".html"
 
