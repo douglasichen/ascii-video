@@ -79,6 +79,28 @@ async function assertPublicHttps(raw: string): Promise<void> {
   if (isPrivateIp(address)) throw new Error("source resolves to a non-public address");
 }
 
+// SSRF-safe fetch: follow redirects MANUALLY, re-running the public-https guard on the initial URL AND every
+// redirect target. Plain redirect:"follow" only checks the first host, so a public URL that 302s to an
+// internal address (169.254.169.254, 127.0.0.1, 10/8 …) would be followed unchecked — this closes that hole.
+// Node's fetch (undici) exposes the 3xx Location on redirect:"manual" (unlike the browser's opaqueredirect),
+// so each hop is re-validated. (Residual DNS-rebind between the guard's resolve and undici's connect is noted
+// in the PR — a full fix pins the resolved IP into the connection.)
+async function safeFetch(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    await assertPublicHttps(current);
+    const r = await fetch(current, { signal, redirect: "manual" });
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get("location");
+      if (!loc) throw new Error("redirect without location");
+      current = new URL(loc, current).toString(); // resolve relative redirects against the current hop
+      continue;
+    }
+    return r;
+  }
+  throw new Error("too many redirects");
+}
+
 // ── ffmpeg ──────────────────────────────────────────────────────────────────────────────────────────────
 function runFfmpeg(args: string[], onStdout?: (b: Buffer) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -158,7 +180,6 @@ export async function bakeAsciivFromFile(path: string, cols: number, rows: numbe
 
 // Fetch the resolved source to /tmp (size-capped), bake, and return the .asciiv bytes.
 async function bakeFromUrl(source: string, cols: number, rows: number, fps: number, settings: BakeSettings): Promise<Uint8Array> {
-  await assertPublicHttps(source);
   const dir = await mkdtemp(join(tmpdir(), "asciiv-src-"));
   const inPath = join(dir, "in.mp4");
   try {
@@ -166,7 +187,7 @@ async function bakeFromUrl(source: string, cols: number, rows: number, fps: numb
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     let buf: Buffer;
     try {
-      const r = await fetch(source, { signal: ctrl.signal, redirect: "follow" });
+      const r = await safeFetch(source, ctrl.signal); // validates the source + every redirect hop (SSRF-safe)
       if (!r.ok) throw new Error("source fetch failed (" + r.status + ")");
       const len = Number(r.headers.get("content-length") || 0);
       if (len && len > MAX_SOURCE_BYTES) throw new Error("source too large");
