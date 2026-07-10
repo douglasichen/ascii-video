@@ -172,7 +172,7 @@ export async function bakeAsciivFromFile(path: string, cols: number, rows: numbe
       cube: settings.shading && settings.saturation > 0,
       audioMime: audio ? "audio/webm" : "",
     };
-    return encodeAsciiv2(header, frames, audio);
+    return await encodeAsciiv2(header, frames, audio); // await before the finally rm's the audio temp dir
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -196,7 +196,10 @@ async function bakeFromUrl(source: string, cols: number, rows: number, fps: numb
       buf = Buffer.from(ab);
     } finally { clearTimeout(timer); }
     await writeFile(inPath, buf);
-    return bakeAsciivFromFile(inPath, cols, rows, fps, settings);
+    // MUST await: this returns inside a try whose `finally` rm's `dir` (which holds in.mp4). Without await
+    // the promise is returned before the bake runs, so `finally` deletes in.mp4 out from under ffmpeg mid-decode
+    // → "Error opening input file … No such file or directory". Await so cleanup happens only after the bake.
+    return await bakeAsciivFromFile(inPath, cols, rows, fps, settings);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
